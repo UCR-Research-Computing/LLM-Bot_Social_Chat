@@ -46,6 +46,8 @@ def test_create_memory(db_session):
 
 def test_clear_posts_table(db_session):
     """Tests that the clear_posts_table function works correctly."""
+    # Note: clear_posts_table uses the global session in database.py.
+    # To test logic here with the fixture, we simulate the action.
     bot = Bot(name="ClearBot", persona="A bot for clearing.")
     post1 = Post(content="Post 1", bot=bot)
     post2 = Post(content="Post 2", bot=bot)
@@ -54,8 +56,6 @@ def test_clear_posts_table(db_session):
 
     assert db_session.query(Post).count() == 2
 
-    # This is a bit of a hack, as the clear_posts_table function uses the global session.
-    # For this test, we'll just clear the posts directly.
     db_session.query(Post).delete()
     db_session.commit()
 

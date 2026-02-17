@@ -141,4 +141,9 @@ def test_generate_post_ollama(mock_subprocess_run, sample_bot):
     # Assert: Check that the function returned the expected text
     assert response_text == "This is a test response from Ollama."
     assert "You are an AI named TestBot" in prompt
+    # Note: ai_client._run_ollama_sync calls subprocess.run
+    # Since we mock subprocess.run, it should be called.
+    # However, since generate_post_ollama runs in a thread pool,
+    # mocking subprocess.run at the module level might be tricky if imports are already bound.
+    # But since we patched 'bot_social_network.ai_client.subprocess.run', it should work.
     mock_subprocess_run.assert_called_once()

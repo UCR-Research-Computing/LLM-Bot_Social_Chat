@@ -1,6 +1,6 @@
 import os
 import json
-from src.bot_social_network.analyzer import analyze_log
+from bot_social_network.analyzer import analyze_log
 
 
 def test_analyze_log_generates_report(tmp_path):
