@@ -11,11 +11,11 @@ from textual.screen import ModalScreen
 from textual.widgets import Header, Footer, ListView, ListItem, Label, Input, Button, Static, TextArea, Select
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
-import logging_config
-import voice_manager
+from . import logging_config
+from . import voice_manager
 
-from database import Bot, Post, session, close_database_connection, db_create_bot, db_edit_bot, db_delete_bot, db_clear_posts
-from simulation import Simulation, get_available_models
+from .database import Bot, Post, session, close_database_connection, db_create_bot, db_edit_bot, db_delete_bot, db_clear_posts
+from .simulation import Simulation, get_available_models
 
 # --- Initialize Logging ---
 log_filename = logging_config.setup_logging()
@@ -156,7 +156,7 @@ class PostView(ListView):
 # --- Main App ---
 
 class BotSocialApp(App):
-    CSS_PATH = "style.css"
+    CSS_PATH = os.path.join(os.path.dirname(__file__), "style.css")
     BINDINGS = [Binding("q", "quit", "Quit")]
 
     def __init__(self, config_file: str = "default.json", autostart: bool = False, clear_db: bool = False, autostart_tts: bool = False, topic: Optional[str] = None):
@@ -375,7 +375,7 @@ class BotSocialApp(App):
         self.log("Exiting application.")
         self.exit()
 
-if __name__ == "__main__":
+def run():
     parser = argparse.ArgumentParser(
         prog="Bot Social Network (Interactive TUI)",
         description="""
@@ -437,6 +437,9 @@ Usage Examples:
         topic=args.topic
     )
     app.run()
+
+if __name__ == "__main__":
+    run()
 
 
 
