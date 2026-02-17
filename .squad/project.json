@@ -1,0 +1,12 @@
+{
+  "project_name": "new-project",
+  "mission": "No mission defined yet.",
+  "status": "planning",
+  "version": "0.1.0",
+  "current_phase": "init",
+  "artifacts": {
+    "design_doc": "",
+    "tests": [],
+    "source_code": []
+  }
+}
