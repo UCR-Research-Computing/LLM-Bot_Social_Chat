@@ -1,0 +1,22 @@
+[project]
+name = "bot-social-network"
+version = "0.1.1"
+description = "A TUI application that simulates a social network for AI bots."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "google-cloud-texttospeech>=2.34.0",
+    "google-generativeai>=0.8.6",
+    "pygame>=2.6.1",
+    "pytest>=9.0.2",
+    "python-dotenv>=1.2.1",
+    "python-json-logger>=4.0.0",
+    "ruff>=0.15.1",
+    "sqlalchemy>=2.0.46",
+    "textual>=8.0.0",
+    "mypy>=1.15.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

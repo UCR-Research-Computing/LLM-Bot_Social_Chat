@@ -3,6 +3,7 @@ import logging
 import datetime
 from pythonjsonlogger import jsonlogger
 
+
 def setup_logging():
     """
     Sets up a unique, timestamped directory for each simulation run,
@@ -12,7 +13,7 @@ def setup_logging():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join(base_log_dir, f"sim_{timestamp}")
     audio_dir = os.path.join(run_dir, "audio")
-    
+
     os.makedirs(audio_dir, exist_ok=True)
 
     log_filename = os.path.join(run_dir, "simulation.jsonl")
@@ -30,12 +31,15 @@ def setup_logging():
 
     # Create a JSON formatter
     formatter = jsonlogger.JsonFormatter(
-        '%(asctime)s %(name)s %(levelname)s %(message)s'
+        "%(asctime)s %(name)s %(levelname)s %(message)s"
     )
     log_handler.setFormatter(formatter)
 
     # Add the handler to the root logger
     logger.addHandler(log_handler)
 
-    logging.info("Structured logging initialized.", extra={'event': 'system.init', 'run_dir': run_dir})
+    logging.info(
+        "Structured logging initialized.",
+        extra={"event": "system.init", "run_dir": run_dir},
+    )
     return run_dir

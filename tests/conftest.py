@@ -1,7 +1,8 @@
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from database import Base
+from bot_social_network.database import Base
+
 
 @pytest.fixture(scope="function")
 def db_session():

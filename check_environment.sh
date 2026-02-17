@@ -112,6 +112,7 @@ echo "--- Core Commands ---"
 check_command "python3"
 check_command "pip"
 check_command "git"
+check_command "uv"
 check_command "sudo"
 
 echo ""

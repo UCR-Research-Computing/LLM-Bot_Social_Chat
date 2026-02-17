@@ -7,11 +7,11 @@
 set -e
 
 echo "--- Running Linter (ruff) ---"
-ruff check .
+uv run ruff check .
 
 echo ""
 echo "--- Running Unit Tests (pytest) ---"
-python3 -m pytest
+uv run pytest
 
 echo ""
 echo "✅ All checks passed!"

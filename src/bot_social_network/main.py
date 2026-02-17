@@ -1,26 +1,53 @@
+from __future__ import annotations
 import json
 import argparse
 import logging
 import asyncio
 import os
 import tempfile
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, TYPE_CHECKING, cast, Any
 
 from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
-from textual.widgets import Header, Footer, ListView, ListItem, Label, Input, Button, Static, TextArea, Select
+from textual.widgets import (
+    Header,
+    Footer,
+    ListView,
+    ListItem,
+    Label,
+    Input,
+    Button,
+    Static,
+    TextArea,
+    Select,
+)
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
-import logging_config
-import voice_manager
 
-from database import Bot, Post, session, close_database_connection, db_create_bot, db_edit_bot, db_delete_bot, db_clear_posts
-from simulation import Simulation, get_available_models
+if TYPE_CHECKING:
+    from .database import Bot, Post
+    from .simulation import Simulation
+
+from . import logging_config
+from . import voice_manager
+
+from .database import (
+    Bot,
+    Post,
+    session,
+    close_database_connection,
+    db_create_bot,
+    db_edit_bot,
+    db_delete_bot,
+    db_clear_posts,
+)
+from .simulation import Simulation, get_available_models
 
 # --- Initialize Logging ---
 log_filename = logging_config.setup_logging()
 
 # --- Screens ---
+
 
 class SaveConfigScreen(ModalScreen[str]):
     """A modal screen for saving a bot configuration."""
@@ -41,6 +68,7 @@ class SaveConfigScreen(ModalScreen[str]):
             if filename:
                 self.dismiss(filename)
 
+
 class LoadConfigScreen(ModalScreen[str]):
     """A modal screen for loading a bot configuration."""
 
@@ -52,7 +80,11 @@ class LoadConfigScreen(ModalScreen[str]):
         with VerticalScroll(id="dialog"):
             yield Label("Load Bot Configuration")
             if self.config_files:
-                yield Select([(f, f) for f in self.config_files], prompt="Select a file", id="config_select")
+                yield Select(
+                    [(f, f) for f in self.config_files],
+                    prompt="Select a file",
+                    id="config_select",
+                )
             else:
                 yield Label("No configuration files found in 'configs/' directory.")
             with Horizontal(id="buttons"):
@@ -64,13 +96,18 @@ class LoadConfigScreen(ModalScreen[str]):
             self.dismiss()
         elif event.button.id == "load":
             select = self.query_one(Select)
-            if select.value:
-                self.dismiss(select.value)
+            if select.value and select.value != Select.BLANK:
+                self.dismiss(str(select.value))
+
 
 class BotEditScreen(ModalScreen[dict]):
     """A modal screen for creating or editing a bot."""
 
-    def __init__(self, bot_to_edit: Optional[Bot] = None, available_models: List[Tuple[str, str]] = []):
+    def __init__(
+        self,
+        bot_to_edit: Optional[Bot] = None,
+        available_models: List[Tuple[str, str]] = [],
+    ):
         super().__init__()
         self.bot_to_edit = bot_to_edit
         self.available_models = available_models
@@ -81,11 +118,11 @@ class BotEditScreen(ModalScreen[dict]):
             yield Input(
                 value=self.bot_to_edit.name if self.bot_to_edit else "",
                 placeholder="Name",
-                id="bot_name"
+                id="bot_name",
             )
             yield TextArea(
                 text=self.bot_to_edit.persona if self.bot_to_edit else "",
-                id="bot_persona"
+                id="bot_persona",
             )
             # Determine the initial value for the Select widget
             initial_model = None
@@ -117,10 +154,15 @@ class BotEditScreen(ModalScreen[dict]):
             if all(bot_data.values()):
                 self.dismiss(bot_data)
 
+
 # --- Widgets ---
+
 
 class BotManager(ListView):
     """Widget to display and manage the list of bots."""
+
+    app: "BotSocialApp"
+
     def on_mount(self) -> None:
         self.border_title = "Bots"
         self.app.run_task(self.refresh_bots())
@@ -128,14 +170,19 @@ class BotManager(ListView):
     async def refresh_bots(self):
         def _get_bots() -> List[Bot]:
             return session.query(Bot).all()
+
         bots = await asyncio.to_thread(_get_bots)
         self.app.bot_names = [bot.name for bot in bots]
         self.clear()
         for bot in bots:
             self.append(ListItem(Label(bot.name)))
 
+
 class PostView(ListView):
     """Widget to display the chat history."""
+
+    app: "BotSocialApp"
+
     def on_mount(self) -> None:
         self.border_title = "Posts"
         self.app.run_task(self.refresh_posts())
@@ -148,61 +195,92 @@ class PostView(ListView):
     async def refresh_posts(self):
         def _get_posts() -> List[Post]:
             return session.query(Post).order_by(Post.id.desc()).all()
+
         posts = await asyncio.to_thread(_get_posts)
         self.clear()
-        for post in reversed(posts): # Display in chronological order
+        for post in reversed(posts):  # Display in chronological order
             self.add_post(post)
+
 
 # --- Main App ---
 
+
 class BotSocialApp(App):
-    CSS_PATH = "style.css"
+    CSS_PATH = os.path.join(os.path.dirname(__file__), "style.css")
     BINDINGS = [Binding("q", "quit", "Quit")]
 
-    def __init__(self, config_file: str = "default.json", autostart: bool = False, clear_db: bool = False, autostart_tts: bool = False, topic: Optional[str] = None):
+    def __init__(
+        self,
+        config_file: str = "default.json",
+        autostart: bool = False,
+        clear_db: bool = False,
+        autostart_tts: bool = False,
+        topic: Optional[str] = None,
+    ):
         super().__init__()
         self.simulation = Simulation(
             config_file=config_file,
             autostart=autostart,
             tts_enabled=autostart_tts,
             clear_db=clear_db,
-            topic=topic
+            topic=topic,
         )
         self.selected_bot: Optional[Bot] = None
         self.available_models = get_available_models()
-        logging.info("Application started.", extra={
-            'event': 'system.start',
-            'config_file': config_file,
-            'autostart': autostart,
-            'tts_enabled': autostart_tts,
-            'clear_db': clear_db,
-            'topic': topic
-        })
+        logging.info(
+            "Application started.",
+            extra={
+                "event": "system.start",
+                "config_file": config_file,
+                "autostart": autostart,
+                "tts_enabled": autostart_tts,
+                "clear_db": clear_db,
+                "topic": topic,
+            },
+        )
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Horizontal(
             Vertical(
                 BotManager(),
-                Horizontal(Button("Create Bot", id="create_bot"), Button("Edit Bot", id="edit_bot")),
+                Horizontal(
+                    Button("Create Bot", id="create_bot"),
+                    Button("Edit Bot", id="edit_bot"),
+                ),
                 Button("Delete Bot", id="delete_bot"),
-                Horizontal(Button("Load Config", id="load_bots"), Button("Save Config", id="save_bots")),
-                id="left-pane"
+                Horizontal(
+                    Button("Load Config", id="load_bots"),
+                    Button("Save Config", id="save_bots"),
+                ),
+                id="left-pane",
             ),
             Vertical(
                 PostView(id="posts"),
-                Horizontal(Button("Start", id="start_chat"), Button("Stop", id="stop_chat"), Button("Clear", id="clear_chat")),
-                Horizontal(Input(placeholder="Topic", id="topic_input"), Button("Inject Topic", id="inject_topic")),
-                Button("TTS: ON" if self.simulation.tts_enabled else "TTS: OFF", id="toggle_tts"),
-                id="right-pane"
-            )
+                Horizontal(
+                    Button("Start", id="start_chat"),
+                    Button("Stop", id="stop_chat"),
+                    Button("Clear", id="clear_chat"),
+                ),
+                Horizontal(
+                    Input(placeholder="Topic", id="topic_input"),
+                    Button("Inject Topic", id="inject_topic"),
+                ),
+                Button(
+                    "TTS: ON" if self.simulation.tts_enabled else "TTS: OFF",
+                    id="toggle_tts",
+                ),
+                id="right-pane",
+            ),
         )
         yield Footer()
 
     def on_mount(self) -> None:
         self.run_task(self.simulation.initialize())
         self.run_task(self.speaker_worker())
-        self.bot_timer = self.set_interval(15, self.run_bot_activity, pause=not self.simulation.autostart)
+        self.bot_timer = self.set_interval(
+            15, self.run_bot_activity, pause=not self.simulation.autostart
+        )
 
     def run_task(self, coro):
         self.simulation.run_task(coro)
@@ -211,12 +289,14 @@ class BotSocialApp(App):
 
     def on_list_view_selected(self, event: ListView.Selected):
         if isinstance(event.list_view, BotManager):
-            bot_name = event.item.children[0].renderable
-            self.run_task(self.select_bot_by_name(str(bot_name)))
-    
+            label = event.item.query_one(Label)
+            bot_name = str(cast(Any, label).renderable)
+            self.run_task(self.select_bot_by_name(bot_name))
+
     async def select_bot_by_name(self, name: str):
         def _get_bot():
             return session.query(Bot).filter_by(name=name).first()
+
         self.selected_bot = await asyncio.to_thread(_get_bot)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -227,15 +307,27 @@ class BotSocialApp(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "create_bot":
             self.selected_bot = None
-            self.push_screen(BotEditScreen(available_models=self.available_models), self.handle_bot_edit_result)
+            self.push_screen(
+                BotEditScreen(available_models=self.available_models),
+                self.handle_bot_edit_result,
+            )
         elif event.button.id == "edit_bot":
             if self.selected_bot:
-                self.push_screen(BotEditScreen(bot_to_edit=self.selected_bot, available_models=self.available_models), self.handle_bot_edit_result)
+                self.push_screen(
+                    BotEditScreen(
+                        bot_to_edit=self.selected_bot,
+                        available_models=self.available_models,
+                    ),
+                    self.handle_bot_edit_result,
+                )
         elif event.button.id == "delete_bot":
             if self.selected_bot:
                 self.run_task(self.action_delete_bot())
         elif event.button.id == "load_bots":
-            self.push_screen(LoadConfigScreen(config_files=self.get_config_files()), self.handle_load_config)
+            self.push_screen(
+                LoadConfigScreen(config_files=self.get_config_files()),
+                self.handle_load_config,
+            )
         elif event.button.id == "save_bots":
             self.push_screen(SaveConfigScreen(), self.handle_save_config)
         elif event.button.id == "start_chat":
@@ -251,13 +343,19 @@ class BotSocialApp(App):
                 topic_input.value = ""
         elif event.button.id == "toggle_tts":
             self.simulation.tts_enabled = not self.simulation.tts_enabled
-            event.button.label = f"TTS: {'ON' if self.simulation.tts_enabled else 'OFF'}"
+            event.button.label = (
+                f"TTS: {'ON' if self.simulation.tts_enabled else 'OFF'}"
+            )
 
     # --- Action & Callback Methods ---
 
     def handle_bot_edit_result(self, bot_data: Optional[dict]):
         if bot_data:
-            task = self.action_edit_bot(bot_data) if self.selected_bot else self.action_create_bot(bot_data)
+            task = (
+                self.action_edit_bot(bot_data)
+                if self.selected_bot
+                else self.action_create_bot(bot_data)
+            )
             self.run_task(task)
 
     def handle_save_config(self, filename: Optional[str]):
@@ -281,23 +379,29 @@ class BotSocialApp(App):
             try:
                 data = await self.simulation.tts_queue.get()
                 post = data["post"]
-                
+
                 self.query_one(PostView).add_post(post)
 
                 if self.simulation.tts_enabled and not post.sender == "SYSTEM":
                     voice_name = voice_manager.select_voice(post.sender)
                     if voice_name:
                         # In TUI mode, we save audio to a temporary file for playback
-                        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio_file:
+                        with tempfile.NamedTemporaryFile(
+                            suffix=".mp3", delete=False
+                        ) as temp_audio_file:
                             output_path = temp_audio_file.name
-                        
-                        success = await voice_manager.generate_voice_file(post.content, voice_name, output_path)
+
+                        success = await voice_manager.generate_voice_file(
+                            post.content, voice_name, output_path
+                        )
                         if success:
-                            await asyncio.to_thread(voice_manager.play_audio_file, output_path)
-                        
+                            await asyncio.to_thread(
+                                voice_manager.play_audio_file, output_path
+                            )
+
                         if os.path.exists(output_path):
                             os.remove(output_path)
-                
+
                 self.simulation.tts_queue.task_done()
             except asyncio.CancelledError:
                 break
@@ -344,38 +448,46 @@ class BotSocialApp(App):
             bots = session.query(Bot).all()
             bots_data = []
             for bot in bots:
-                bot_dict = {"name": bot.name, "persona": bot.persona, "model": bot.model}
+                bot_dict = {
+                    "name": bot.name,
+                    "persona": bot.persona,
+                    "model": bot.model,
+                }
                 memories = [{"key": m.key, "value": m.value} for m in bot.memories]
                 if memories:
                     bot_dict["memories"] = memories
                 bots_data.append(bot_dict)
-            
+
             filepath = os.path.join("configs", f"{filename}.json")
             with open(filepath, "w") as f:
                 json.dump(bots_data, f, indent=4)
+
         await asyncio.to_thread(_save)
 
     async def action_quit(self) -> None:
         self.log("Stopping bot timer...")
         self.bot_timer.stop()
-        
+
         self.log("Stopping any playing audio...")
         voice_manager.stop_audio()
 
-        self.log(f"Cancelling {len(self.simulation.background_tasks)} background tasks...")
+        self.log(
+            f"Cancelling {len(self.simulation.background_tasks)} background tasks..."
+        )
         for task in self.simulation.background_tasks:
             task.cancel()
-        
+
         await asyncio.gather(*self.simulation.background_tasks, return_exceptions=True)
-        
+
         self.log("Closing database connection...")
         await asyncio.to_thread(close_database_connection)
-        
-        logging.info("Application exited.", extra={'event': 'system.stop'})
+
+        logging.info("Application exited.", extra={"event": "system.stop"})
         self.log("Exiting application.")
         self.exit()
 
-if __name__ == "__main__":
+
+def run():
     parser = argparse.ArgumentParser(
         prog="Bot Social Network (Interactive TUI)",
         description="""
@@ -398,46 +510,46 @@ Usage Examples:
   # Start a fresh, voiced conversation
   python3 main.py --autostart --tts --clear-db
 --------------------------------------------------------------------------------
-"""
+""",
     )
     parser.add_argument(
-        "--config", 
-        type=str, 
-        default="default.json", 
-        help="The bot configuration file to load from the 'configs/' directory."
+        "--config",
+        type=str,
+        default="default.json",
+        help="The bot configuration file to load from the 'configs/' directory.",
     )
     parser.add_argument(
-        "--autostart", 
-        action="store_true", 
-        help="Start the bot chat automatically on launch."
+        "--autostart",
+        action="store_true",
+        help="Start the bot chat automatically on launch.",
     )
     parser.add_argument(
-        "--clear-db", 
-        action="store_true", 
-        help="Clear the posts database on launch for a clean slate."
+        "--clear-db",
+        action="store_true",
+        help="Clear the posts database on launch for a clean slate.",
     )
     parser.add_argument(
-        "--tts", 
-        action="store_true", 
-        help="Enable text-to-speech on launch. Requires Google Cloud authentication."
+        "--tts",
+        action="store_true",
+        help="Enable text-to-speech on launch. Requires Google Cloud authentication.",
     )
     parser.add_argument(
         "--topic",
         type=str,
         default=None,
-        help="An initial topic to inject into the conversation."
+        help="An initial topic to inject into the conversation.",
     )
     args = parser.parse_args()
 
     app = BotSocialApp(
         config_file=args.config,
-        autostart=args.autostart, 
-        clear_db=args.clear_db, 
+        autostart=args.autostart,
+        clear_db=args.clear_db,
         autostart_tts=args.tts,
-        topic=args.topic
+        topic=args.topic,
     )
     app.run()
 
 
-
-
+if __name__ == "__main__":
+    run()
