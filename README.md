@@ -71,17 +71,17 @@ The script will guide you through:
 - Setting up a Python `venv`.
 - Creating a launcher script in your user profile's `Scripts` directory.
 
-### 3. Manual Setup
+### 3. Installation (Recommended)
 
-If you prefer to set up the project manually:
+This project uses `uv` for dependency management.
 
 ```bash
 # Clone the repository
 git clone https://github.com/your-username/bot-social-network.git
 cd bot-social-network
 
-# Install the required packages
-pip install -r requirements.txt
+# Sync the environment and install dependencies
+uv sync
 ```
 
 ### 4. Configuration
@@ -97,51 +97,44 @@ To use the Gemini models, you need to provide your API key.
 
 The application will automatically load this key at startup.
 
-### 4. Running the App (TUI Mode)
+### 5. Running the App (TUI Mode)
 
-For an interactive session, use the `main.py` script.
+For an interactive session, use the `main.py` script via `uv run`.
 
 ```bash
 # Run the application with the default configuration
-python3 main.py
+uv run python -m bot_social_network.main
 
 # Load a specific bot configuration and inject a starting topic
-python3 main.py --config example_tinydolphin.json --topic "What do you think of the ocean?"
+uv run python -m bot_social_network.main --config example_tinydolphin.json --topic "What do you think of the ocean?"
 
 # Start the bot conversation automatically on launch
-python3 main.py --autostart
+uv run python -m bot_social_network.main --autostart
 
 # Enable Text-to-Speech on launch
-python3 main.py --tts
+uv run python -m bot_social_network.main --tts
 
 # Clear the post history database on launch for a clean slate
-python3 main.py --clear-db
+uv run python -m bot_social_network.main --clear-db
 ```
 
-### 5. Running Experiments (Headless Mode)
+### 6. Running Experiments (Headless Mode)
 
-For research and automated runs, you can use the `headless.py` script. This runs the full simulation without the TUI and provides several flags for controlling the experiment.
+For research and automated runs, you can use the `headless.py` script.
 
 ```bash
-# Run a short, deterministic experiment with a specific config and topic
-python3 headless.py --config example_gemma3n.json --max-posts 20 --topic "What is the nature of memory?" --deterministic
-
-# Run a 5-minute simulation with TTS enabled
-python3 headless.py --config gemini_models_showcase.json --duration 300 --tts
+# Run a short, deterministic experiment
+uv run python -m bot_social_network.headless --config example_gemma3n.json --max-posts 20 --topic "What is the nature of memory?" --deterministic
 ```
-
-All simulation data is saved to a unique `.jsonl` file in the `logs/` directory.
 
 ---
 
 ## 🧪 Testing
 
-This project uses `pytest` for automated testing.
-
 To run the test suite:
 
 ```bash
-python3 -m pytest
+uv run pytest
 ```
 
 For a more comprehensive check, including code linting, use the `run_checks.sh` script:
@@ -156,13 +149,13 @@ For a more comprehensive check, including code linting, use the `run_checks.sh` 
 
 The application is built with a simple and modular architecture:
 
-*   **`main.py`**: Manages the Textual TUI for interactive sessions.
-*   **`headless.py`**: Runs the simulation without a TUI for automated experiments.
-*   **`simulation.py`**: Contains the core simulation logic, shared by both modes.
-*   **`ai_client.py`**: Handles all interactions with the LLM providers (Gemini/Ollama).
-*   **`voice_manager.py`**: Manages voice generation and playback using Google Cloud TTS and Pygame.
-*   **`logging_config.py`**: Configures the structured JSONL logging for each simulation run.
-*   **`database.py`**: Uses SQLAlchemy to manage the SQLite database for storing bots and posts.
+*   **`src/bot_social_network/main.py`**: Manages the Textual TUI for interactive sessions.
+*   **`src/bot_social_network/headless.py`**: Runs the simulation without a TUI for automated experiments.
+*   **`src/bot_social_network/simulation.py`**: Contains the core simulation logic, shared by both modes.
+*   **`src/bot_social_network/ai_client.py`**: Handles all interactions with the LLM providers (Gemini/Ollama).
+*   **`src/bot_social_network/voice_manager.py`**: Manages voice generation and playback using Google Cloud TTS and Pygame.
+*   **`src/bot_social_network/logging_config.py`**: Configures the structured JSONL logging for each simulation run.
+*   **`src/bot_social_network/database.py`**: Uses SQLAlchemy to manage the SQLite database for storing bots and posts.
 *   **`configs/`**: A directory for your bot configurations. `default.json` is the default, but you can create and load any number of custom rosters. You can also add a "memories" section to each bot to give them a persistent memory.
 
 ---

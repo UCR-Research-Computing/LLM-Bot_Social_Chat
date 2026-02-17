@@ -1,7 +1,7 @@
 [project]
 name = "bot-social-network"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.1.1"
+description = "A TUI application that simulates a social network for AI bots."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -14,4 +14,9 @@ dependencies = [
     "ruff>=0.15.1",
     "sqlalchemy>=2.0.46",
     "textual>=8.0.0",
+    "mypy>=1.15.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

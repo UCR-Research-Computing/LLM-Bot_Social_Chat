@@ -1,5 +1,6 @@
 import pytest
-from voice_manager import select_voice, _voice_cache
+from bot_social_network.voice_manager import select_voice, _voice_cache
+
 
 @pytest.fixture(autouse=True)
 def mock_voice_cache():
@@ -11,6 +12,7 @@ def mock_voice_cache():
     _voice_cache["male"] = []
     _voice_cache["female"] = []
 
+
 def test_select_voice_consistency():
     """Tests that the same bot name always gets the same voice."""
     bot_name = "ConsistentBot"
@@ -19,26 +21,30 @@ def test_select_voice_consistency():
     assert voice1 is not None
     assert voice1 == voice2
 
+
 def test_select_voice_distribution():
     """Tests that different bot names can get different voices."""
     # This test is slightly more complex to guarantee different voices are selected
     # without relying on the internal implementation of hash() too much.
-    
+
     all_voices = _voice_cache["male"] + _voice_cache["female"]
     if len(all_voices) < 2:
         pytest.skip("Not enough voices to test distribution.")
 
     found_voices = set()
     # Iterate through bot names until we find two that produce different voices
-    for i in range(200): # Limit to 200 attempts to prevent infinite loops
+    for i in range(200):  # Limit to 200 attempts to prevent infinite loops
         bot_name = f"Bot_{i}"
         voice = select_voice(bot_name)
         if voice:
             found_voices.add(voice)
         if len(found_voices) > 1:
             break
-    
-    assert len(found_voices) > 1, "Could not find two bot names that produce different voices."
+
+    assert len(found_voices) > 1, (
+        "Could not find two bot names that produce different voices."
+    )
+
 
 def test_select_voice_genders():
     """Tests that the hashing correctly assigns to male and female lists."""
@@ -49,7 +55,7 @@ def test_select_voice_genders():
         if hash(name) % 2 == 0:
             female_bot_name = name
             break
-    
+
     # Find a name that hashes to an odd number for male voice
     male_bot_name = ""
     for i in range(100):
