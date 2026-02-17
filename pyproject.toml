@@ -1,6 +1,6 @@
 [project]
 name = "bot-social-network"
-version = "0.1.1"
+version = "0.1.2"
 description = "A TUI application that simulates a social network for AI bots."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,6 +15,15 @@ dependencies = [
     "sqlalchemy>=2.0.46",
     "textual>=8.0.0",
     "mypy>=1.15.0",
+    "pandas>=2.2.3",
+    "seaborn>=0.13.2",
+    "networkx>=3.4.2",
+    "Jinja2>=3.1.5",
+    "matplotlib>=3.10.0",
+    "textblob>=0.18.0.post1",
+    "pandas-stubs>=2.2.3.241126",
+    "types-seaborn>=0.13.2.20250111",
+    "types-networkx>=3.4.2.20241103",
 ]
 
 [build-system]

@@ -27,3 +27,4 @@ bots.db-journal
 *.tmp
 .env
 bots_collaborator.db
+analysis_report.html

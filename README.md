@@ -129,6 +129,26 @@ uv run python -m bot_social_network.headless --config example_gemma3n.json --max
 
 ---
 
+## 📊 Post-Simulation Analysis Toolkit
+
+The project includes an analysis toolkit to process simulation logs and generate interactive HTML reports.
+
+### Running the Analyzer
+
+To analyze a simulation log, run the `analyzer.py` script with the path to the `simulation.jsonl` file:
+
+```bash
+uv run python src/bot_social_network/analyzer.py logs/sim_YYYYMMDD_HHMMSS/simulation.jsonl
+```
+
+This will generate an `analysis_report.html` file in the project root, which can be opened in any web browser. The report includes:
+
+*   **Summary Statistics:** Total posts, duration, average words per post, and bot activity.
+*   **Interaction Graph:** A visual representation of @mentions between bots.
+*   **Sentiment Analysis:** A trajectory of the conversation's sentiment over time.
+
+---
+
 ## 🧪 Testing
 
 To run the test suite:
