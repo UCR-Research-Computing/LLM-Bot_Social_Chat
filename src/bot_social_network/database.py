@@ -1,6 +1,13 @@
 from sqlalchemy import create_engine, ForeignKey, String, Text
-from sqlalchemy.orm import relationship, sessionmaker, DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import (
+    relationship,
+    sessionmaker,
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+)
 from typing import List
+
 
 class Base(DeclarativeBase):
     pass
@@ -12,7 +19,9 @@ class Bot(Base):
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     persona: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(String(255), default="gemini-1.5-flash")
-    posts: Mapped[List["Post"]] = relationship("Post", back_populates="bot", cascade="all, delete-orphan")
+    posts: Mapped[List["Post"]] = relationship(
+        "Post", back_populates="bot", cascade="all, delete-orphan"
+    )
     memories: Mapped[List["Memory"]] = relationship(
         "Memory", back_populates="bot", cascade="all, delete-orphan"
     )
