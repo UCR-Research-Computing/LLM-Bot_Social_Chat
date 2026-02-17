@@ -67,6 +67,11 @@ Usage Examples:
         action="store_true",
         help="Select bots in a predictable, round-robin order instead of randomly.",
     )
+    parser.add_argument(
+        "--clear-db",
+        action="store_true",
+        help="Clear the post history database before starting.",
+    )
     args = parser.parse_args()
 
     if not args.duration and not args.max_posts:
@@ -82,7 +87,7 @@ Usage Examples:
         config_file=args.config,
         autostart=True,  # Always autostart in headless
         tts_enabled=args.tts,
-        clear_db=True,  # Always start fresh in headless
+        clear_db=args.clear_db,
         max_posts=args.max_posts,
         duration=args.duration,
         topic=args.topic,

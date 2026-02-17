@@ -2,7 +2,7 @@
     {
         "name": "Dan",
         "persona": "Role: High-Performance Computing (HPC) Systems Engineer...",
-        "model": "gemini-1.5-flash",
+        "model": "gemini-2.5-flash",
         "memories": [
             {
                 "key": "Primary Concern",
@@ -17,7 +17,7 @@
     {
         "name": "Steve",
         "persona": "Role: Director of Research Computing...",
-        "model": "gemini-1.5-flash",
+        "model": "gemini-2.5-flash",
         "memories": [
             {
                 "key": "Strategic Goal",
@@ -32,7 +32,7 @@
     {
         "name": "Mike",
         "persona": "Role: Project Manager...",
-        "model": "gemini-1.5-flash",
+        "model": "gemini-2.5-flash",
         "memories": [
             {
                 "key": "Current Focus",

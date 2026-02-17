@@ -18,7 +18,7 @@ class Bot(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     persona: Mapped[str] = mapped_column(Text, nullable=False)
-    model: Mapped[str] = mapped_column(String(255), default="gemini-1.5-flash")
+    model: Mapped[str] = mapped_column(String(255), default="gemini-2.5-flash")
     posts: Mapped[List["Post"]] = relationship(
         "Post", back_populates="bot", cascade="all, delete-orphan"
     )
