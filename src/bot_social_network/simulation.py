@@ -18,12 +18,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import settings
-from .ai_client import AIClient, ModelError, gather_limited
+from .ai_client import AIClient, ModelError, gather_limited, inbox
 from .database import Bot, Database, Post
 
 log = logging.getLogger(__name__)
 
-MENTION_RE = re.compile(r"@([A-Za-z0-9_][A-Za-z0-9_.-]*)")
 MAX_FAILS = 3
 BENCH_TURNS = 5
 
@@ -197,14 +196,19 @@ class Simulation:
         last_sender = recent[0].sender if recent else None
         pool = [b for b in active if b.name != last_sender] or active
         if recent:
-            names = {b.name.lower(): b for b in pool}
-            mentioned = [
-                names[m.lower()]
-                for m in MENTION_RE.findall(recent[0].content or "")
-                if m.lower() in names
-            ]
-            if mentioned and self.rng.random() < 0.8:
-                return self.rng.choice(mentioned)
+            # Whoever owes a reply speaks next: a bot @mentioned since it last
+            # spoke, oldest unanswered mention first. Only if nobody is owed a
+            # reply do we fall back to giving quiet bots the floor.
+            all_names = [b.name for b in bots]
+            owed: list[tuple[int, Bot]] = []
+            for b in pool:
+                waiting = inbox(recent, b.name, all_names)
+                if waiting:
+                    age = next(i for i, p in enumerate(recent) if p is waiting[0])
+                    owed.append((age, b))
+            if owed and self.rng.random() < 0.9:
+                owed.sort(key=lambda t: -t[0])  # largest index = oldest mention
+                return owed[0][1]
         # Weight by turns since last spoke so quiet bots get the floor.
         weights = [
             1 + (self.turn - self.state[b.name].last_turn)

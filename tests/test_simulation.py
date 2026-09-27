@@ -123,6 +123,37 @@ def test_mentioned_bot_speaks_next(db, tmp_path):
     assert picks.count("Mike") >= 30 and "Dan" not in picks
 
 
+def test_owed_reply_beats_newest_mention(db, tmp_path):
+    """Mike was asked first and never answered; he speaks before Steve (asked later)."""
+    sim = Simulation(db, FakeAI(), seed=1, memory_every=0)
+    sim.load_team(str(write_team(tmp_path)))
+    bots = db.bots()
+    recent = [  # newest first
+        Post(sender="Dan", content="And @Steve, budget?"),
+        Post(sender="Steve", content="thinking"),
+        Post(sender="Dan", content="@Mike what's the storage plan?"),
+    ]
+    picks = [sim.pick_speaker(bots, recent).name for _ in range(40)]
+    assert picks.count("Mike") >= 30
+
+
+def test_multiword_mention_selects_target(db, tmp_path):
+    team = [
+        {
+            "name": "Captain Eva Rostova",
+            "persona": "captain",
+            "model": "gemini-3.8-flash",
+        },
+        {"name": "Zeke", "persona": "ai", "model": "gemini-3.8-flash"},
+        {"name": "Commander Jax", "persona": "xo", "model": "gemini-3.8-flash"},
+    ]
+    sim = Simulation(db, FakeAI(), seed=2, memory_every=0)
+    sim.load_team(str(write_team(tmp_path, team)))
+    recent = [Post(sender="Zeke", content="@Captain Eva Rostova, drive is ready.")]
+    picks = [sim.pick_speaker(db.bots(), recent).name for _ in range(40)]
+    assert picks.count("Captain Eva Rostova") >= 30
+
+
 def test_never_same_speaker_twice(db, tmp_path):
     sim = Simulation(db, FakeAI(), seed=3, memory_every=0)
     sim.load_team(str(write_team(tmp_path)))

@@ -67,8 +67,9 @@ def system_prompt(bot: Bot, others: Sequence[str], memories: Sequence[Memory]) -
         "Stay fully in character. Write ONE short post (1-4 sentences, under 80 words).",
         "Advance the conversation: react to something specific, add a new idea or a "
         "concrete detail, and when it fits ask a direct question.",
-        "Address people with @Name. Never write other members' lines, never add a "
-        "name prefix like 'Name:' to your own post, no hashtags, no stage directions.",
+        "Address people with @Name (their full name). Never write other members' "
+        "lines, never add a name prefix like 'Name:' to your own post, no hashtags, "
+        "no stage directions.",
     ]
     if others:
         lines.append("Other members: " + ", ".join(f"@{n}" for n in others) + ".")
@@ -79,23 +80,81 @@ def system_prompt(bot: Bot, others: Sequence[str], memories: Sequence[Memory]) -
     return "\n".join(lines)
 
 
-def conversation_prompt(recent_posts: Sequence[Post], bot_name: str) -> str:
-    """recent_posts are newest first (as stored); render oldest first."""
+def mentions(text: str, names: Sequence[str]) -> list[str]:
+    """Member names @mentioned in text, in order. Handles multi-word names
+    ("@Captain Eva Rostova") by matching known names, longest first."""
+    low = (text or "").lower()
+    found: list[tuple[int, str]] = []
+    taken: set[int] = set()
+    for n in sorted(names, key=len, reverse=True):
+        start = 0
+        key = "@" + n.lower()
+        while (i := low.find(key, start)) >= 0:
+            end = i + len(key)
+            boundary = end == len(low) or not (low[end].isalnum() or low[end] == "_")
+            if boundary and i not in taken:
+                found.append((i, n))
+                taken.update(range(i, end))
+            start = end
+    seen: dict[str, None] = {}
+    for _, n in sorted(found):
+        seen.setdefault(n, None)
+    return list(seen)
+
+
+def inbox(
+    recent_posts: Sequence[Post], bot_name: str, names: Sequence[str]
+) -> list[Post]:
+    """Posts that @mention bot_name since bot_name last spoke (oldest first).
+
+    recent_posts are newest first. This is what the bot owes a reply to.
+    """
+    out: list[Post] = []
+    for p in recent_posts:
+        if p.error:
+            continue
+        if p.sender == bot_name:
+            break
+        if bot_name in mentions(p.content, names):
+            out.append(p)
+    return list(reversed(out))
+
+
+def conversation_prompt(
+    recent_posts: Sequence[Post],
+    bot_name: str,
+    names: Sequence[str] = (),
+) -> str:
+    """recent_posts are newest first (as stored); render oldest first, then say
+    exactly who is waiting on this bot and what the latest post is."""
     if not recent_posts:
         return (
             "The chat is empty. Open with something on your mind that the others "
             "will want to answer."
         )
+    shown = [p for p in reversed(list(recent_posts)[:HISTORY_POSTS]) if not p.error]
     rows = [
         f"@{p.sender or (p.bot.name if p.bot else 'Unknown')}: {p.content}"
-        for p in reversed(list(recent_posts)[:HISTORY_POSTS])
-        if not p.error
+        for p in shown
     ]
-    return (
-        "Recent chat (oldest first):\n"
-        + "\n".join(rows)
-        + f"\n\nWrite {bot_name}'s next post."
-    )
+    parts = ["Recent chat (oldest first):", *rows, ""]
+    waiting = inbox(recent_posts, bot_name, names) if names else []
+    if waiting:
+        parts.append(f"Addressed to you ({bot_name}) since you last spoke:")
+        parts += [f"- @{p.sender}: {p.content}" for p in waiting]
+        askers = ", ".join(dict.fromkeys(f"@{p.sender}" for p in waiting))
+        parts.append(
+            f"Reply to {askers} first: answer their questions directly and refer to "
+            "what they actually said. Then add your own angle or a question."
+        )
+    elif shown:
+        last = shown[-1]
+        parts.append(
+            f"The latest post is from @{last.sender}. Respond to it or to an earlier "
+            "point that still needs an answer, then move the conversation forward."
+        )
+    parts.append(f"Write {bot_name}'s next post.")
+    return "\n".join(parts)
 
 
 def memory_prompt(bot: Bot, recent_posts: Sequence[Post]) -> str:
@@ -382,7 +441,7 @@ class AIClient:
         memories: Sequence[Memory],
     ) -> Reply:
         system = system_prompt(bot, others, memories)
-        prompt = conversation_prompt(recent_posts, bot.name)
+        prompt = conversation_prompt(recent_posts, bot.name, [bot.name, *others])
         info = settings.model_info(bot.model)
         if info.provider == "ollama":
             reply = await self.ollama.generate(

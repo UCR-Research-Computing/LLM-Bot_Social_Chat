@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import re
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -21,8 +20,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape  # noqa: E40
 from textblob import TextBlob  # type: ignore  # noqa: E402
 
 from . import settings  # noqa: E402
-
-MENTION = re.compile(r"@([A-Za-z0-9_][A-Za-z0-9_.-]*)")
+from .ai_client import mentions as find_mentions  # noqa: E402
 
 
 def resolve_log(arg: str) -> Path:
@@ -126,8 +124,7 @@ def analyze_log(log_file_path: str, output: str | None = None) -> str | None:
     for _, row in posts_df.iterrows():
         sender = row["bot_name"]
         content = row["post_content"]
-        mentions = MENTION.findall(str(content))
-        for mention in mentions:
+        for mention in find_mentions(str(content), list(bot_names)):
             if mention in bot_names and mention != sender:
                 if G.has_edge(sender, mention):
                     G[sender][mention]["weight"] += 1
