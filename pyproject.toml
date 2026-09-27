@@ -1,6 +1,6 @@
 [project]
 name = "bot-social-network"
-version = "0.1.5"
+version = "0.1.6"
 description = "A TUI application that simulates a social network for AI bots."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -25,6 +25,9 @@ dependencies = [
     "types-seaborn>=0.13.2.20250111",
     "types-networkx>=3.4.2.20241103",
 ]
+
+[project.scripts]
+bot-social-network = "bot_social_network.main:run"
 
 [build-system]
 requires = ["hatchling"]
