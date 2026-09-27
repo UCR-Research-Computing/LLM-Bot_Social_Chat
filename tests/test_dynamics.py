@@ -285,3 +285,19 @@ def test_conversation_metrics_on_a_known_transcript():
     assert m["reciprocity"] == 0.5
     assert 0 < m["speaking_gini"] < 1
     assert m["repeat_rate"] == 0
+
+
+@pytest.mark.parametrize(
+    "raw, want",
+    [
+        (
+            'Okay, I understand! Here\'s a short post for Beacon:\n\n"Shiny things lure fools."',
+            "Shiny things lure fools.",
+        ),
+        ("Sure! Here is my post: The reef remembers.", "The reef remembers."),
+        ("Okay, let's begin. WHALE WHALE WHALE!", "WHALE WHALE WHALE!"),
+        ("Okay, the light is pretty.", "Okay, the light is pretty."),  # real post, keep
+    ],
+)
+def test_sanitize_strips_assistant_preamble(raw, want):
+    assert sanitize_post(raw, "Beacon", NAMES + ["Beacon"]).text == want

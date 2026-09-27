@@ -163,21 +163,22 @@ def _teams() -> int:
     from rich.console import Console
     from rich.table import Table
 
-    from .simulation import TeamError, list_teams, load_team
+    from .simulation import TeamError, list_teams, read_team
 
-    t = Table("team", "bots", "models", "source")
+    t = Table("team", "about", "bots", "models", "source")
     for name, path in list_teams():
         try:
-            bots, _ = load_team(path)
+            bots, _, info = read_team(path)
             models = sorted({b["model"] for b in bots})
             t.add_row(
                 name.removesuffix(".json"),
+                info.description,
                 ", ".join(b["name"] for b in bots),
                 ", ".join(models),
                 "saved" if path.parent == settings.USER_CONFIGS else "bundled",
             )
         except TeamError as e:
-            t.add_row(name, f"[red]{e}[/]", "", "")
+            t.add_row(name, f"[red]{e}[/]", "", "", "")
     Console().print(t)
     return 0
 

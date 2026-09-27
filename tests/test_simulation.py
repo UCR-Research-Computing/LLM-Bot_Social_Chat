@@ -76,15 +76,51 @@ def test_load_team_validation(tmp_path, data, msg):
 
 
 def test_bundled_teams_all_valid_and_current():
-    teams = list_teams()
-    assert len(teams) >= 8
+    from bot_social_network.simulation import read_team
+
+    teams = [(n, p) for n, p in list_teams() if p.parent == settings.BUNDLED_CONFIGS]
+    assert len(teams) >= 14
     for name, path in teams:
-        bots, notes = load_team(path)
+        bots, notes, info = read_team(path)
         assert notes == [], f"{name} still pins a retired model: {notes}"
+        assert info.description and info.topic, f"{name} needs description and topic"
+        voices = [b["voice"] for b in bots]
+        assert all(voices), f"{name}: every bundled bot gets a cast voice"
+        assert len(set(voices)) == len(voices), f"{name}: duplicate voices {voices}"
+        assert all(
+            b["temperature"] is None for b in bots if b["model"].startswith("gemini-3")
+        ), f"{name}: Gemini 3 should keep the default temperature"
         for b in bots:
-            info = settings.model_info(b["model"])
-            if info.provider == "gemini":
-                assert b["model"] in {m.id for m in settings.GEMINI_MODELS}, (name, b)
+            m = settings.model_info(b["model"])
+            if m.provider == "gemini":
+                assert b["model"] in {x.id for x in settings.GEMINI_MODELS}, (name, b)
+            assert len(b["persona"].split()) >= 15 or m.provider == "ollama", (
+                name,
+                b["name"],
+            )
+
+
+def test_team_object_format_and_default_topic(tmp_path):
+    from bot_social_network.simulation import read_team
+
+    p = write_team(tmp_path, {"description": "d", "topic": "t", "bots": TEAM})
+    bots, _, info = read_team(p)
+    assert info.description == "d" and info.topic == "t" and len(bots) == 3
+    bad = write_team(
+        tmp_path, [{"name": "A", "persona": "p", "voice": "Nope"}], "bad.json"
+    )
+    with pytest.raises(TeamError, match="unknown voice"):
+        read_team(bad)
+
+
+def test_save_team_keeps_metadata(db, tmp_path):
+    from bot_social_network.simulation import TeamInfo, read_team
+
+    sim = Simulation(db, FakeAI(), seed=1, memory_every=0)
+    sim.load_team(str(write_team(tmp_path)))
+    path = save_team(db, "withmeta", TeamInfo("about", "opening"))
+    bots, _, info = read_team(path)
+    assert info.topic == "opening" and len(bots) == 3
 
 
 def test_resolve_team_by_name_and_user_override(tmp_path):
@@ -340,3 +376,50 @@ def test_fair_share_spreads_turns(db, tmp_path):
         asyncio.run(sim.step())
     counts = sorted(sim.stats.by_bot.values())
     assert counts[0] >= 8 and counts[-1] <= 12  # 40 posts over 4 bots, near even
+
+
+def test_pingpong_pair_yields_the_floor(db, tmp_path):
+    """Two bots trading questions cannot lock the others out."""
+    team = [{"name": n, "persona": "p", "model": "gemini-3.8-flash"} for n in "ABCD"]
+
+    class PingPongAI(FakeAI):
+        async def write_post(self, bot, others, recent, memories, **kw):
+            self.calls.append(bot.name)
+            partner = {"A": "B", "B": "A"}.get(bot.name, "A")
+            return Reply(
+                f"@{partner} what do you think about topic {len(self.calls)}?",
+                bot.model,
+                10,
+                5,
+                0.001,
+                5,
+                "STOP",
+            )
+
+    ai = PingPongAI()
+    sim = Simulation(db, ai, seed=7, memory_every=0)
+    sim.load_team(str(write_team(tmp_path, team)))
+    for _ in range(24):
+        asyncio.run(sim.step())
+    order = [p.sender for p in reversed(db.recent_posts(50))]  # stored posts
+    counts = {n: order.count(n) for n in "ABCD"}
+    assert counts["C"] >= 4 and counts["D"] >= 4, counts
+    # never more than 4 posts in a row from just the A/B pair
+    run = best = 0
+    for n in order:
+        run = run + 1 if n in "AB" else 0
+        best = max(best, run)
+    assert best <= 4, order
+
+
+def test_silent_for_a_full_round_gets_the_floor(db, tmp_path):
+    team = [{"name": n, "persona": "p", "model": "gemini-3.8-flash"} for n in "ABC"]
+    sim = Simulation(db, FakeAI(), seed=1, memory_every=0)
+    sim.load_team(str(write_team(tmp_path, team)))
+    recent = [  # newest first: A and B each spoke, C silent for a full round
+        Post(sender="B", content="@A yes?"),
+        Post(sender="A", content="@B ok?"),
+        Post(sender="B", content="@A hm"),
+    ]
+    sim.ledger.record(99, "B", "@A yes?", ["A", "B", "C"], turn=1)  # A owes B
+    assert sim.pick_speaker(db.bots(), recent).name == "C"

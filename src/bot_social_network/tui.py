@@ -133,7 +133,8 @@ class BotEditScreen(ModalScreen[dict[str, Any] | None]):
             yield TextArea(b.persona if b else "", id="persona")
             yield Select(opts, value=model, allow_blank=False, id="model")
             yield Select(
-                [("Voice: automatic", "")] + [(v, v) for v in settings.VOICES],
+                [("Voice: automatic", "")]
+                + [(settings.voice_label(v), v) for v in settings.VOICES],
                 value=(b.voice or "") if b else "",
                 allow_blank=False,
                 id="voice",
@@ -270,8 +271,12 @@ class BotSocialApp(App[None]):
             await self.do_load_team(self.team)
         else:
             await self.refresh_all()
-        if self.topic:
-            await asyncio.to_thread(self.sim.inject_topic, self.topic)
+        # Opening topic: --topic wins; else the team's own topic on a fresh feed.
+        topic = self.topic
+        if not topic and not await asyncio.to_thread(self.db.recent_posts, 1):
+            topic = self.sim.team_info.topic
+        if topic:
+            await asyncio.to_thread(self.sim.inject_topic, topic)
             await self.refresh_feed()
         self.timer = self.set_interval(self.interval, self.tick, pause=True)
         if self.autostart:
@@ -488,7 +493,7 @@ class BotSocialApp(App[None]):
             self.notify(str(e), severity="error", timeout=10)
             return
         self.team = name
-        self.sub_title = name
+        self.sub_title = self.sim.team_info.description or name
         await self.refresh_all()
         for n in notes:
             self.notify(f"Model upgraded: {n}", timeout=6)
@@ -496,7 +501,7 @@ class BotSocialApp(App[None]):
     def action_save_team(self) -> None:
         def done(name: str | None) -> None:
             if name:
-                path = save_team(self.db, name)
+                path = save_team(self.db, name, self.sim.team_info)
                 self.notify(f"Saved {path}")
 
         self.push_screen(SaveScreen(), done)

@@ -3,8 +3,10 @@
 The model only writes the words. Everything around it is deterministic code from
 dynamics.py:
 
-- Turn-taking: a ledger of open @mention questions is a priority queue; the bot
-  with the oldest unanswered question speaks next. Otherwise a bot owed a reply
+- Turn-taking: a pair that has had the last 4 posts to itself sits out a turn;
+  a bot silent for a full round gets the floor; then a ledger of open @mention
+  questions is a priority queue and the bot with the oldest unanswered question
+  speaks next. Otherwise a bot owed a reply
   (mentioned since it last spoke), otherwise the fair-share scheduler (fewest
   words spoken so far, then silent longest) picks, with a little randomness. Never the same
   bot twice in a row.
@@ -43,6 +45,7 @@ log = logging.getLogger(__name__)
 MAX_FAILS = 3
 BENCH_TURNS = 5
 MEMORY_SLOTS = 8  # memories shown per post, picked by BM25
+PINGPONG_LIMIT = 4  # max consecutive bot posts shared by only two members
 
 
 # --------------------------------------------------------------------------- teams
@@ -77,13 +80,30 @@ def resolve_team(name_or_path: str) -> Path:
     )
 
 
-def load_team(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    """Validate a team file. Returns (bots, notes) where notes list model upgrades."""
+@dataclass
+class TeamInfo:
+    """Team-level metadata: a one-line description and an opening topic."""
+
+    description: str = ""
+    topic: str = ""
+
+
+def read_team(path: Path) -> tuple[list[dict[str, Any]], list[str], TeamInfo]:
+    """Validate a team file. Returns (bots, notes, info); notes list model upgrades.
+
+    A team file is either a plain list of bots or an object
+    {"description": ..., "topic": ..., "bots": [...]}.
+    """
     try:
         data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as e:
         raise TeamError(f"{path.name}: {e}") from e
+    info = TeamInfo()
     if isinstance(data, dict):
+        info = TeamInfo(
+            description=str(data.get("description") or "").strip(),
+            topic=str(data.get("topic") or "").strip(),
+        )
         data = data.get("bots", [])
     if not isinstance(data, list) or not data:
         raise TeamError(f"{path.name}: expected a non-empty list of bots")
@@ -99,6 +119,9 @@ def load_team(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
         new = settings.upgrade_model(old)
         if old and old != new:
             notes.append(f"{name}: {old} -> {new}")
+        voice = b.get("voice")
+        if voice and voice not in settings.VOICES:
+            raise TeamError(f"{path.name}: {name} has unknown voice '{voice}'")
         mems = [
             {"key": str(m["key"]), "value": str(m["value"])}
             for m in b.get("memories") or []
@@ -110,19 +133,28 @@ def load_team(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
                 "name": name,
                 "persona": str(b["persona"]),
                 "model": new,
-                "voice": b.get("voice"),
+                "voice": voice,
                 "temperature": float(temp) if temp is not None else None,
                 "memories": mems,
             }
         )
+    return bots, notes, info
+
+
+def load_team(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    bots, notes, _ = read_team(path)
     return bots, notes
 
 
-def save_team(db: Database, name: str) -> Path:
+def save_team(db: Database, name: str, info: TeamInfo | None = None) -> Path:
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._") or "team"
     settings.ensure_dirs()
     path = settings.USER_CONFIGS / f"{safe.removesuffix('.json')}.json"
-    path.write_text(json.dumps(db.export_team(), indent=2) + "\n")
+    bots = db.export_team()
+    data: Any = bots
+    if info and (info.description or info.topic):
+        data = {"description": info.description, "topic": info.topic, "bots": bots}
+    path.write_text(json.dumps(data, indent=2) + "\n")
     return path
 
 
@@ -179,6 +211,7 @@ class Simulation:
         self.ledger = ObligationLedger()
         self.fair = FairScheduler()
         self.repeats = RepetitionGuard()
+        self.team_info = TeamInfo()
         # Wrap-up mode: bots answer what they owe and close; new questions are
         # not tracked, so the run can end with nothing left hanging.
         self.closing = False
@@ -186,7 +219,7 @@ class Simulation:
     # ---- setup ---------------------------------------------------------------
     def load_team(self, name_or_path: str) -> list[str]:
         path = resolve_team(name_or_path)
-        bots, notes = load_team(path)
+        bots, notes, self.team_info = read_team(path)
         self.db.replace_team(bots)
         self.state.clear()
         self.turn = 0
@@ -236,14 +269,32 @@ class Simulation:
             return bot
         last_sender = recent[0].sender if recent else None
         pool = [b for b in active if b.name != last_sender] or active
+        # 0. Break two-bot ping-pong. When the last PINGPONG_LIMIT bot posts came
+        #    from only two members, those two sit out one turn (if anyone else is
+        #    available), so a pair that keeps @mentioning each other cannot shut
+        #    the rest of the room out.
+        speakers = [p.sender for p in recent if p.sender != "SYSTEM" and not p.error]
+        window = speakers[:PINGPONG_LIMIT]
+        if len(pool) > 1 and len(window) == PINGPONG_LIMIT and len(set(window)) <= 2:
+            others = [b for b in pool if b.name not in set(window)]
+            if others:
+                pool = others
         by_name = {b.name: b for b in pool}
         self.fair.sync(b.name for b in bots)
-        # 1. The oldest unanswered question in the ledger (a priority queue).
+        # 1. Anyone who has not spoken for a full round (every other member has
+        #    posted since) gets the floor: fewest words first.
+        n_active = len(active)
+        if n_active > 2 and len(speakers) >= n_active:
+            spoke = set(speakers[: n_active + 1])
+            starved = [b.name for b in pool if b.name not in spoke]
+            if starved:
+                return by_name[self.fair.ranked(starved)[0]]
+        # 2. The oldest unanswered question in the ledger (a priority queue).
         for name, _turn in self.ledger.debtors():
             if name in by_name and self.rng.random() < 0.95:
                 return by_name[name]
         if recent:
-            # 2. Whoever was @mentioned since they last spoke (no question mark
+            # 3. Whoever was @mentioned since they last spoke (no question mark
             #    needed), oldest mention first.
             all_names = [b.name for b in bots]
             owed: list[tuple[int, Bot]] = []
@@ -255,7 +306,7 @@ class Simulation:
             if owed and self.rng.random() < 0.9:
                 owed.sort(key=lambda t: -t[0])  # largest index = oldest mention
                 return owed[0][1]
-        # 3. Fair share: fewest words spoken so far, then silent longest. Pick
+        # 4. Fair share: fewest words spoken so far, then silent longest. Pick
         #    between the two fairest so the order is not rigid.
         ranked = self.fair.ranked([b.name for b in pool])
         top = ranked[:2] if len(ranked) > 1 else ranked

@@ -76,6 +76,9 @@ async def run_headless(
     console.print(f"[bold]Team:[/] {team} ({len(names)} bots: {', '.join(names)})")
     for n in notes:
         console.print(f"[yellow]Model upgraded[/] {n}")
+    if sim.team_info.description:
+        console.print(f"[dim]{sim.team_info.description}[/]")
+    topic = topic or (None if keep_posts else sim.team_info.topic or None)
     if topic:
         print_post(sim.inject_topic(topic), names)
 
