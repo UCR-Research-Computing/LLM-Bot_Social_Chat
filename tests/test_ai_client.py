@@ -1,7 +1,6 @@
 import asyncio
 from types import SimpleNamespace
 
-import httpx
 import pytest
 
 from bot_social_network import settings
@@ -10,7 +9,6 @@ from bot_social_network.ai_client import (
     GeminiClient,
     MemoryNote,
     ModelError,
-    OllamaClient,
     clean_post,
     conversation_prompt,
     system_prompt,
@@ -270,83 +268,13 @@ def test_client_created_once_across_threads(monkeypatch):
     assert len(made) == 1 and all(x is made[0] for x in got)
 
 
-# ---- ollama ----------------------------------------------------------------
+# ---- local models are not supported -----------------------------------------
 
 
-def ollama_with(handler):
-    transport = httpx.MockTransport(handler)
-    real = httpx.AsyncClient
+def test_local_models_fall_back_to_default():
+    from bot_social_network import settings
 
-    class C(real):  # type: ignore[misc, valid-type]
-        def __init__(self, *a, **kw):
-            kw["transport"] = transport
-            super().__init__(*a, **kw)
-
-    return C
-
-
-def test_ollama_chat(monkeypatch, bot):
-    bot.model = "gemma4:e4b"
-    seen = {}
-
-    def handler(req):
-        seen["body"] = req.content
-        return httpx.Response(
-            200,
-            json={
-                "message": {"content": "Dan: local hello"},
-                "prompt_eval_count": 50,
-                "eval_count": 7,
-                "done_reason": "stop",
-            },
-        )
-
-    monkeypatch.setattr(httpx, "AsyncClient", ollama_with(handler))
-    r = asyncio.run(
-        AIClient(ollama=OllamaClient("http://x")).write_post(bot, [], [], [])
-    )
-    assert r.text == "local hello" and r.cost_usd == 0 and r.tokens_out == 7
-    assert b'"role":"system"' in seen["body"].replace(b" ", b"")
-
-
-def test_ollama_retries_without_think_flag(monkeypatch, bot):
-    bot.model = "llama3.2"
-    calls = []
-
-    def handler(req):
-        calls.append(req.content)
-        if b'"think"' in req.content:
-            return httpx.Response(400, text='{"error":"does not support think"}')
-        return httpx.Response(200, json={"message": {"content": "ok"}})
-
-    monkeypatch.setattr(httpx, "AsyncClient", ollama_with(handler))
-    r = asyncio.run(
-        AIClient(ollama=OllamaClient("http://x")).write_post(bot, [], [], [])
-    )
-    assert r.text == "ok" and len(calls) == 2
-
-
-def test_ollama_missing_model(monkeypatch, bot):
-    bot.model = "nope"
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        ollama_with(lambda r: httpx.Response(404, text="not found")),
-    )
-    with pytest.raises(ModelError, match="ollama pull nope"):
-        asyncio.run(
-            AIClient(ollama=OllamaClient("http://x")).write_post(bot, [], [], [])
-        )
-
-
-def test_ollama_down(monkeypatch, bot):
-    bot.model = "gemma4:e4b"
-
-    def handler(req):
-        raise httpx.ConnectError("refused")
-
-    monkeypatch.setattr(httpx, "AsyncClient", ollama_with(handler))
-    with pytest.raises(ModelError, match="not running"):
-        asyncio.run(
-            AIClient(ollama=OllamaClient("http://x")).write_post(bot, [], [], [])
-        )
+    assert settings.upgrade_model("llama3.2:latest") == settings.DEFAULT_MODEL
+    assert settings.upgrade_model("gemma4:e4b") == settings.DEFAULT_MODEL
+    assert settings.upgrade_model("gemma-4-31b-it") == "gemma-4-31b-it"
+    assert settings.upgrade_model("gemini-2.5-flash") == "gemini-3.8-flash"

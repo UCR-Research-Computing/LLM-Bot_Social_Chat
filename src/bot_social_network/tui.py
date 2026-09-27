@@ -9,7 +9,7 @@ from typing import Any
 
 from rich.markup import escape
 from rich.text import Text
-from textual import on, work
+from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -264,7 +264,6 @@ class BotSocialApp(App[None]):
                 severity="error",
                 timeout=15,
             )
-        self.load_ollama_models()
         if self.clear_db:
             await asyncio.to_thread(self.db.clear_posts)
         if self.team and (self.clear_db or not await asyncio.to_thread(self.db.bots)):
@@ -282,11 +281,6 @@ class BotSocialApp(App[None]):
         if self.autostart:
             self.action_toggle_run()
         self.update_status()
-
-    @work(exclusive=True, group="ollama")
-    async def load_ollama_models(self) -> None:
-        names = await self.ai.ollama.list_models()
-        self.models += [(f"{n}  (Ollama, local)", n) for n in names]
 
     # ---- rendering -----------------------------------------------------------
     def color(self, name: str | None) -> str:

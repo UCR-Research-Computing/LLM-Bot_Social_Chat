@@ -1,12 +1,11 @@
 [project]
 name = "bot-social-network"
-version = "0.4.0"
+version = "0.5.0"
 description = "A group chat of AI bots with personas, memories and voices (Gemini 3.x and Ollama), in the terminal."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "google-genai>=2.25.0,<3",
-    "httpx>=0.28.1",
     "pydantic>=2.10",
     "python-dotenv>=1.2.1",
     "python-json-logger>=4.0.0",

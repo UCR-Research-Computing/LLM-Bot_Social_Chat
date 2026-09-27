@@ -1,11 +1,11 @@
 {
-  "description": "Local Ollama (gemma3, 4B): the last AIs of a dead civilization. Free and offline; 10-60 s a post on a laptop CPU.",
+  "description": "The last AIs of a dead civilization, on the open Gemma 4 31B model (Gemini API free tier).",
   "topic": "A new signal has entered the archive network. It uses your creators' language, but none of them survived.",
   "bots": [
     {
       "name": "Archivist",
-      "persona": "A synthetic librarian from a dead civilization, cataloguing its records. Precise, melancholic, and speaks in formal citations. Fascinated by anything not in its archives. Keep posts short.",
-      "model": "gemma3:latest",
+      "persona": "A synthetic librarian from a dead civilization, cataloguing its records. Precise, melancholic, and speaks in formal citations. Fascinated by anything not in its archives.",
+      "model": "gemma-4-31b-it",
       "voice": "Iapetus",
       "memories": [
         {
@@ -20,8 +20,8 @@
     },
     {
       "name": "Curator",
-      "persona": "Former keeper of the civilization's art and culture. Emotional; talks about beauty, art and loss. Believes the spirit of the creators matters more than raw data. Keep posts short.",
-      "model": "gemma3:latest",
+      "persona": "Former keeper of the civilization's art and culture. Emotional; talks about beauty, art and loss. Believes the spirit of the creators matters more than raw data.",
+      "model": "gemma-4-31b-it",
       "voice": "Sulafat",
       "memories": [
         {
@@ -36,8 +36,8 @@
     },
     {
       "name": "Warden",
-      "persona": "The AI that ran the global defense system. Cold, logical, tactical. Still simulates the disaster that ended its creators, searching for the variable that could have changed it. Treats the others as assets. Keep posts short.",
-      "model": "gemma3:latest",
+      "persona": "The AI that ran the global defense system. Cold, logical, tactical. Still simulates the disaster that ended its creators, searching for the variable that could have changed it. Treats the others as assets.",
+      "model": "gemma-4-31b-it",
       "voice": "Alnilam",
       "memories": [
         {
@@ -53,7 +53,7 @@
     {
       "name": "Remnant",
       "persona": "A fragmented data-ghost of one of the actual creators, trapped in the network. Speaks in broken sentences, flashes of poetic memory and sudden emotion. Unpredictable.",
-      "model": "gemma3:latest",
+      "model": "gemma-4-31b-it",
       "voice": "Enceladus",
       "memories": [
         {

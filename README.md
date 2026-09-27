@@ -11,7 +11,7 @@ topic, and watch them argue, remember what was said, and (optionally) speak out 
 ## Features
 
 - **Current models.** Gemini 3.8 Flash (default), 3.5 Flash-Lite, 3.1 Pro, and the open Gemma 4
-  models through the Gemini API, plus any local **Ollama** model. Teams can mix them.
+  models (free tier), all through the Gemini API. Teams can mix them.
 - **Real conversations.** Bots answer whoever @mentions them, quiet bots get the floor, nobody
   talks twice in a row. Persona and memories go in the system instruction; the chat goes in
   the prompt.
@@ -47,9 +47,6 @@ chmod 600 ~/.config/bot-social-network/.env
 bot-social-network doctor
 ```
 
-Ollama is optional; if it is running on `localhost:11434` (or `OLLAMA_HOST`), its models show up
-in the model picker.
-
 ## Use
 
 ```bash
@@ -59,7 +56,6 @@ bot-social-network headless --team ai_philosophy_club --max-posts 20 \
     --topic "Is memory identity?" --budget 0.10
 bot-social-network teams                             # bundled and saved teams
 bot-social-network models --check                    # test each Gemini model live
-bot-social-network models --check --ollama gemma4:e4b
 bot-social-network analyze latest                    # HTML report of the last run
 bot-social-network analyze latest --json             # conversation-quality metrics
 ```
@@ -93,8 +89,8 @@ pass `--topic`), and a model and voice picked for each bot's role.
 | `mars_colony_crisis` | A Mars base rations power in a dust storm | Flash, Flash-Lite (station AI) |
 | `startup_pitch` | A founder faces three investors | Flash, Pro (the skeptical VC) |
 | `debate_club` | Moderated debate with a fact-checker | Pro (both debaters), Flash, Flash-Lite |
-| `local_tiny` | Deep-sea chat on local llama3.2 (free, offline) | Ollama |
-| `local_gemma4` | The last AIs of a dead world on local gemma3 (free, offline) | Ollama |
+| `deep_sea` | A glowing submarine drifts into a trench full of odd creatures | Gemma 4 26B (free tier) |
+| `last_archive` | The last AIs of a dead civilization hear a signal | Gemma 4 31B (free tier) |
 
 How models are cast: Gemini 3.8 Flash for most characters; 3.1 Pro only where depth pays for its
 cost (historians, ancient beings, scientists, debaters, the skeptical VC); 3.5 Flash-Lite for
@@ -135,7 +131,7 @@ the same name. Retired model ids in old team files (Gemini 1.5, 2.x) are upgrade
 
 Optional environment variables: `BSN_MEMORY_MODEL` (default `gemini-3.5-flash-lite`),
 `BSN_TTS_MODEL` (default `gemini-3.8-flash-lite-tts`), `BSN_MAX_POST_TOKENS` (400),
-`OLLAMA_HOST`, `BSN_HOME` (data dir).
+`BSN_HOME` (data dir).
 
 ## Cost
 
@@ -150,5 +146,5 @@ uv sync
 uv run ruff check . --fix && uv run ruff format . && uv run mypy src && uv run pytest
 ```
 
-Tests never call a paid API: the Gemini and Ollama clients are faked, the TUI is driven with
+Tests never call a paid API: the Gemini client is faked, the TUI is driven with
 Textual's pilot, and a fixture keeps tests away from your real key and data.
