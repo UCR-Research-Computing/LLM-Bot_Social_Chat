@@ -79,27 +79,22 @@ async def run_headless(
         print_post(sim.inject_topic(topic), names)
 
     voice = Voice(ai.gemini) if tts else None
-    audio_q: asyncio.Queue[Post | None] = asyncio.Queue(maxsize=2)
 
-    async def speaker() -> None:
-        while True:
-            post = await audio_q.get()
-            if post is None:
-                return
-            bot = db.bot(post.sender or "")
-            try:
-                assert voice is not None
-                sp = await voice.synthesize(
-                    post.content,
-                    voice_for(post.sender or "", bot.voice if bot else None),
-                    run / "audio" / f"post_{post.id}.wav",
-                )
-                sim.stats.tts_cost_usd += sp.cost_usd
-                await asyncio.to_thread(voice.play, sp.path)
-            except Exception as e:
-                console.print(f"[red]TTS failed:[/] {e}")
+    async def speak(post: Post) -> None:
+        """Read one post aloud; the loop waits for it, so voice never falls behind."""
+        assert voice is not None
+        bot = db.bot(post.sender or "")
+        try:
+            sp = await voice.synthesize(
+                post.content,
+                voice_for(post.sender or "", bot.voice if bot else None),
+                run / "audio" / f"post_{post.id}.wav",
+            )
+            sim.stats.tts_cost_usd += sp.cost_usd
+            await asyncio.to_thread(voice.play, sp.path)
+        except Exception as e:
+            console.print(f"[red]TTS failed:[/] {e}")
 
-    speaker_task = asyncio.create_task(speaker()) if voice else None
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -127,8 +122,8 @@ async def run_headless(
                 continue
             print_post(post, names)
             if voice and post.sender != "SYSTEM":
-                await audio_q.put(post)
-            elif delay:
+                await speak(post)
+            if delay:
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=delay)
                 except asyncio.TimeoutError:
@@ -136,13 +131,9 @@ async def run_headless(
         else:
             reason = "interrupted"
     finally:
+        if voice:
+            voice.stop()
         await sim.drain(timeout=20)
-        if speaker_task:
-            await audio_q.put(None)
-            try:
-                await asyncio.wait_for(speaker_task, timeout=60)
-            except asyncio.TimeoutError:
-                speaker_task.cancel()
         await sim.shutdown()
         db.close()
 
