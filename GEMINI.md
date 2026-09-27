@@ -28,4 +28,9 @@ through the Gemini API (google-genai), or local Ollama models over its HTTP API.
   thinking mode and thinking room) and `LEGACY_MODEL_MAP` together.
 - Thinking tokens count against `max_output_tokens`; keep `think_room` for models that think,
   or replies are cut off mid-sentence.
+- Bundled teams: description + topic, a distinct voice per bot from `settings.VOICE_INFO`, no
+  temperature on Gemini 3 models (Google recommends the 1.0 default), Pro only for roles that
+  need depth. `test_bundled_teams_all_valid_and_current` enforces this.
+- Gemini TTS reads every word of its input aloud (style prefixes included) and rejects system
+  instructions; pick the voice, do not prompt a style.
 - Gauntlet: `uv run ruff check . --fix && uv run ruff format . && uv run mypy src && uv run pytest`.

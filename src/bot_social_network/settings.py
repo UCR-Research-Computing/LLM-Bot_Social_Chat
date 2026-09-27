@@ -127,13 +127,48 @@ TTS_MODEL = os.environ.get("BSN_TTS_MODEL", "gemini-3.8-flash-lite-tts")
 TTS_OUT_PER_M = 6.00  # audio tokens, 25 per second
 TTS_IN_PER_M = 0.50
 
-# Gemini TTS prebuilt voices (all 30 answered on 2026-09-26).
-VOICES = (
-    "Zephyr Puck Charon Kore Fenrir Leda Orus Aoede Callirrhoe Autonoe Enceladus "
-    "Iapetus Umbriel Algieba Despina Erinome Algenib Rasalgethi Laomedeia Achernar "
-    "Alnilam Schedar Gacrux Pulcherrima Achird Zubenelgenubi Vindemiatrix Sadachbia "
-    "Sadaltager Sulafat"
-).split()
+# Gemini TTS prebuilt voices (all 30 answered on 2026-09-26). Quality from
+# ai.google.dev/gemini-api/docs/speech-generation, gender from Google Cloud's
+# Gemini-TTS voice table. Teams use these to cast a voice that fits each bot.
+VOICE_INFO: dict[str, tuple[str, str]] = {
+    "Zephyr": ("Bright", "F"),
+    "Puck": ("Upbeat", "M"),
+    "Charon": ("Informative", "M"),
+    "Kore": ("Firm", "F"),
+    "Fenrir": ("Excitable", "M"),
+    "Leda": ("Youthful", "F"),
+    "Orus": ("Firm", "M"),
+    "Aoede": ("Breezy", "F"),
+    "Callirrhoe": ("Easy-going", "F"),
+    "Autonoe": ("Bright", "F"),
+    "Enceladus": ("Breathy", "M"),
+    "Iapetus": ("Clear", "M"),
+    "Umbriel": ("Easy-going", "M"),
+    "Algieba": ("Smooth", "M"),
+    "Despina": ("Smooth", "F"),
+    "Erinome": ("Clear", "F"),
+    "Algenib": ("Gravelly", "M"),
+    "Rasalgethi": ("Informative", "M"),
+    "Laomedeia": ("Upbeat", "F"),
+    "Achernar": ("Soft", "F"),
+    "Alnilam": ("Firm", "M"),
+    "Schedar": ("Even", "M"),
+    "Gacrux": ("Mature", "F"),
+    "Pulcherrima": ("Forward", "F"),
+    "Achird": ("Friendly", "M"),
+    "Zubenelgenubi": ("Casual", "M"),
+    "Vindemiatrix": ("Gentle", "F"),
+    "Sadachbia": ("Lively", "M"),
+    "Sadaltager": ("Knowledgeable", "M"),
+    "Sulafat": ("Warm", "F"),
+}
+VOICES = list(VOICE_INFO)
+
+
+def voice_label(v: str) -> str:
+    q, g = VOICE_INFO.get(v, ("", ""))
+    return f"{v} ({q}, {g})" if q else v
+
 
 OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 if not OLLAMA_URL.startswith("http"):

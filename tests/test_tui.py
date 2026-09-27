@@ -35,7 +35,7 @@ def app(tmp_path):
 async def test_loads_team_steps_and_counts(app):
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
-        assert app.names == ["Dan", "Steve", "Mike"]
+        assert app.names == ["Steve", "Dan", "Mike"]
         await pilot.press("n")
         await pilot.pause()
         await pilot.press("n")

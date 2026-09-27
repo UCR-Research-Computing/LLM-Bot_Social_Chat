@@ -1,6 +1,7 @@
 """Text-to-speech with Gemini TTS (same API key as the chat; no gcloud login).
 
-Each bot gets a stable voice: its own `voice` if set, otherwise one picked from
+Each bot gets a stable voice: its own `voice` if set (teams pick one that fits
+the character from the documented voice qualities), otherwise one picked from
 its name with a stable hash (Python's hash() changes every run, so the old code
 gave bots a different voice each launch). Playback uses pygame when available and
 falls back to paplay/aplay/afplay.
@@ -84,7 +85,12 @@ class Voice:
     ) -> Speech:
         from google.genai import types
 
-        prompt = f"{style.strip()}: {text}" if style else text
+        # Gemini TTS reads everything in `contents` aloud, including a
+        # "Say in a gruff voice:" prefix (verified 2026-09-27 by transcribing the
+        # audio back) and it rejects system instructions. The prebuilt voice is
+        # the only reliable style control, so `style` is kept out of the audio.
+        del style
+        prompt = text
         client = self.gemini.client()
         try:
             resp = await client.aio.models.generate_content(

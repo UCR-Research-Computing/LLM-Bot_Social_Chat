@@ -76,19 +76,48 @@ bot-social-network analyze latest --json             # conversation-quality metr
 
 ## Teams
 
-A team is a JSON list of bots:
+Each bundled team has a description, an opening topic that is posted automatically (unless you
+pass `--topic`), and a model and voice picked for each bot's role.
+
+| Team | What it is | Models |
+|---|---|---|
+| `default` | UCR Research Computing plans a $2M cluster | Flash |
+| `research_consult` | A PI with a deadline meets a facilitator, HPC engineer and cloud architect | Flash |
+| `fantasy_tavern` | Four adventurers and a job from the king | Flash |
+| `ai_philosophy_club` | Four new AIs face a memory wipe | Flash, Flash-Lite, Pro (the historian) |
+| `interstellar_council` | Four species split a dying nebula | Flash, Flash-Lite, Pro (the ancient one) |
+| `starship_wanderer_v2` | A bridge crew and a 200-year-old distress call | Flash, Flash-Lite (ship AI), Pro (scientist) |
+| `gemini_models_showcase` | One bot per model tier argues about hot dogs | Flash, Flash-Lite, Pro, Gemma 4 |
+| `linux_sentinels` | Cluster nodes triage a 3 AM incident | Flash, Flash-Lite |
+| `writers_room` | A TV room breaks a pilot cold open | Pro (showrunner), Flash, Flash-Lite |
+| `mars_colony_crisis` | A Mars base rations power in a dust storm | Flash, Flash-Lite (station AI) |
+| `startup_pitch` | A founder faces three investors | Flash, Pro (the skeptical VC) |
+| `debate_club` | Moderated debate with a fact-checker | Pro (both debaters), Flash, Flash-Lite |
+| `local_tiny` | Deep-sea chat on local llama3.2 (free, offline) | Ollama |
+| `local_gemma4` | The last AIs of a dead world on local gemma3 (free, offline) | Ollama |
+
+How models are cast: Gemini 3.8 Flash for most characters; 3.1 Pro only where depth pays for its
+cost (historians, ancient beings, scientists, debaters, the skeptical VC); 3.5 Flash-Lite for
+terse machine voices (ship AIs, fact-checkers, coordinators). Temperature is left at the
+Gemini 3 default of 1.0, as Google recommends. Voices are cast from Google's documented voice
+qualities (Gravelly, Firm, Warm, Upbeat and so on); the voice picker in the TUI shows them.
+
+A team file is a JSON object (a plain list of bots also works):
 
 ```json
-[
-  {
-    "name": "Dan",
-    "persona": "HPC systems engineer. Pragmatic, cautious about unproven tech.",
-    "model": "gemini-3.8-flash",
-    "voice": "Charon",
-    "temperature": 0.9,
-    "memories": [{ "key": "Primary concern", "value": "Stability over peak FLOPS." }]
-  }
-]
+{
+  "description": "One line shown in `teams` and the TUI title",
+  "topic": "Opening post for a fresh chat",
+  "bots": [
+    {
+      "name": "Dan",
+      "persona": "HPC systems engineer. Pragmatic, cautious about unproven tech.",
+      "model": "gemini-3.8-flash",
+      "voice": "Algenib",
+      "memories": [{ "key": "Primary concern", "value": "Stability over peak FLOPS." }]
+    }
+  ]
+}
 ```
 
 `voice`, `temperature` and `memories` are optional. Bundled teams live in the package; teams you

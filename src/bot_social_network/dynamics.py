@@ -387,6 +387,14 @@ def _edit_distance(a: str, b: str, cap: int = 3) -> int:
     return prev[-1]
 
 
+_PREAMBLE = re.compile(
+    r"^\s*(?:(?:okay|ok|sure|certainly|alright|got it|of course)[,.!]*\s*)?"
+    r"(?:i understand[.!]*\s*|i think i understand[.!]*\s*)?"
+    r"(?:here(?:'s| is)[^:\n]{0,80}:\s*|let'?s (?:begin|start|proceed)[^\n]{0,80}?[.!:]\s*)",
+    re.IGNORECASE,
+)
+
+
 def sanitize_post(
     text: str, speaker: str, names: Sequence[str], max_words: int = 110
 ) -> Sanitized:
@@ -416,6 +424,12 @@ def sanitize_post(
         kept.append(line)
     t = "\n".join(kept).strip()
 
+    # Small local models often wrap the post in assistant boilerplate:
+    # 'Okay, I understand! Here's a short post for Beacon: "..."'. Keep the post.
+    m = _PREAMBLE.match(t)
+    if m and m.end() < len(t):
+        t = t[m.end() :].strip()
+        fixes.append("removed assistant preamble")
     for prefix in (f"**{speaker}:**", f"@{speaker}:", f"{speaker}:"):
         if t.lower().startswith(prefix.lower()):
             t = t[len(prefix) :].strip()
