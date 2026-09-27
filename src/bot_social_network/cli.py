@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="bot-social-network",
         description="A group chat of AI bots with personas, memories and voices. "
-        "Gemini 3.x and local Ollama models.",
+        "Gemini 3.x and Gemma 4 through the Gemini API.",
         epilog=(
             "examples:\n"
             "  bot-social-network                         open the TUI with the default team\n"
@@ -83,13 +83,6 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument(
         "--check", action="store_true", help="one tiny live call per Gemini model"
     )
-    m.add_argument(
-        "--ollama",
-        nargs="*",
-        metavar="MODEL",
-        help="with --check, also test these local models (no names = all; slow, "
-        "each one loads into RAM)",
-    )
 
     a = sub.add_parser("analyze", help="HTML report from a run log")
     a.add_argument(
@@ -105,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="print conversation-quality metrics as JSON instead of the report",
     )
 
-    sub.add_parser("doctor", help="check key, models, Ollama, audio and data paths")
+    sub.add_parser("doctor", help="check key, models, audio and data paths")
     return p
 
 
@@ -149,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "teams":
         return _teams()
     if cmd == "models":
-        return _models(args.check, args.ollama)
+        return _models(args.check)
     if cmd == "analyze":
         from .analyzer import analyze_cli
 
@@ -183,7 +176,7 @@ def _teams() -> int:
     return 0
 
 
-def _models(check: bool, ollama_check: list[str] | None = None) -> int:
+def _models(check: bool) -> int:
     from rich.console import Console
     from rich.table import Table
 
@@ -191,10 +184,7 @@ def _models(check: bool, ollama_check: list[str] | None = None) -> int:
     from .simulation import check_models
 
     ai = AIClient()
-    ollama = asyncio.run(ai.ollama.list_models())
     ids = [m.id for m in settings.GEMINI_MODELS]
-    if ollama_check is not None:
-        ids += ollama_check or ollama
     results = asyncio.run(check_models(ai, ids)) if check else {}
     t = Table(
         "model",
@@ -208,11 +198,6 @@ def _models(check: bool, ollama_check: list[str] | None = None) -> int:
         row = [m.id, "gemini", price, m.note]
         if check:
             row.append(results.get(m.id, ""))
-        t.add_row(*row)
-    for n in ollama:
-        row = [n, "ollama", "local", ""]
-        if check:
-            row.append(results.get(n, "[dim]not tested (use --ollama)[/]"))
         t.add_row(*row)
     Console().print(t)
     Console().print(
@@ -246,12 +231,6 @@ def _doctor() -> int:
             c.print(f"model        {m}: {'[green]' if good else '[red]'}{r}[/]")
     else:
         ok = False
-    ollama = asyncio.run(ai.ollama.list_models())
-    c.print(
-        f"ollama       {len(ollama)} models at {settings.OLLAMA_URL}"
-        if ollama
-        else "ollama       not running (optional)"
-    )
     try:
         import pygame  # noqa: F401
 

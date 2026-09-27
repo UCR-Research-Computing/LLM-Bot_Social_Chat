@@ -37,11 +37,10 @@ wheels = [
 
 [[package]]
 name = "bot-social-network"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "google-genai" },
-    { name = "httpx" },
     { name = "jinja2" },
     { name = "matplotlib" },
     { name = "networkx" },
@@ -71,7 +70,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "google-genai", specifier = ">=2.25.0,<3" },
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.5" },
     { name = "matplotlib", specifier = ">=3.10.0" },
     { name = "networkx", specifier = ">=3.4.2" },

@@ -8,10 +8,9 @@ from bot_social_network.tui import BotEditScreen, BotSocialApp, ConfirmScreen
 
 class FakeAI:
     def __init__(self):
-        from bot_social_network.ai_client import GeminiClient, OllamaClient
+        from bot_social_network.ai_client import GeminiClient
 
         self.gemini = GeminiClient(api_key="x")
-        self.ollama = OllamaClient("http://127.0.0.1:9")  # nothing listens
 
     async def write_post(
         self, bot, others, recent, memories, questions=(), avoid=None, closing=False

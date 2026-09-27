@@ -44,7 +44,7 @@ load_env()
 class ModelInfo:
     id: str
     label: str
-    provider: str  # "gemini" or "ollama"
+    provider: str  # "gemini" (Gemini API; Gemma 4 included)
     in_per_m: float = 0.0  # USD per 1M input tokens (0 = free / local)
     out_per_m: float = 0.0  # USD per 1M output tokens, thinking included
     # How to keep chat replies short and cheap. Measured 2026-09-26: 3.8 Flash
@@ -170,24 +170,24 @@ def voice_label(v: str) -> str:
     return f"{v} ({q}, {g})" if q else v
 
 
-OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-if not OLLAMA_URL.startswith("http"):
-    OLLAMA_URL = "http://" + OLLAMA_URL
-
-
 def model_info(model_id: str) -> ModelInfo:
     for m in GEMINI_MODELS:
         if m.id == model_id:
             return m
-    if model_id.startswith(("gemini", "gemma-")):
-        return ModelInfo(model_id, model_id, "gemini", thinking="none")
-    return ModelInfo(model_id, model_id, "ollama")
+    return ModelInfo(model_id, model_id, "gemini", thinking="none")
+
+
+def is_api_model(model_id: str) -> bool:
+    return model_id.startswith(("gemini", "gemma-"))
 
 
 def upgrade_model(model_id: str | None) -> str:
+    """Map retired Gemini ids to current ones. Local models (e.g. old Ollama
+    teams) are not supported, so any non-API id falls back to the default."""
     if not model_id:
         return DEFAULT_MODEL
-    return LEGACY_MODEL_MAP.get(model_id, model_id)
+    new = LEGACY_MODEL_MAP.get(model_id, model_id)
+    return new if is_api_model(new) else DEFAULT_MODEL
 
 
 def ensure_dirs() -> None:

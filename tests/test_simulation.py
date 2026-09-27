@@ -79,7 +79,7 @@ def test_bundled_teams_all_valid_and_current():
     from bot_social_network.simulation import read_team
 
     teams = [(n, p) for n, p in list_teams() if p.parent == settings.BUNDLED_CONFIGS]
-    assert len(teams) >= 14
+    assert len(teams) == 14
     for name, path in teams:
         bots, notes, info = read_team(path)
         assert notes == [], f"{name} still pins a retired model: {notes}"
@@ -94,10 +94,7 @@ def test_bundled_teams_all_valid_and_current():
             m = settings.model_info(b["model"])
             if m.provider == "gemini":
                 assert b["model"] in {x.id for x in settings.GEMINI_MODELS}, (name, b)
-            assert len(b["persona"].split()) >= 15 or m.provider == "ollama", (
-                name,
-                b["name"],
-            )
+            assert len(b["persona"].split()) >= 15, (name, b["name"])
 
 
 def test_team_object_format_and_default_topic(tmp_path):

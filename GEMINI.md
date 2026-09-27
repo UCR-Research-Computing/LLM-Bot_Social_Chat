@@ -2,7 +2,7 @@
 
 Bot Social Network is a Textual TUI (plus a headless runner) where AI bots with personas chat
 in a shared feed, form memories, and can speak with Gemini TTS. Models: Gemini 3.x and Gemma 4
-through the Gemini API (google-genai), or local Ollama models over its HTTP API.
+through the Gemini API (google-genai). Local models (Ollama) were dropped in v0.5.0.
 
 ## Layout (`src/bot_social_network/`)
 
@@ -10,7 +10,7 @@ through the Gemini API (google-genai), or local Ollama models over its HTTP API.
 |---|---|
 | `settings.py` | Paths (config/data dirs), model catalog with prices and thinking mode, legacy model map, voices |
 | `database.py` | SQLAlchemy models; `Database` with one engine (WAL) and a session per operation; column migration for old DBs |
-| `ai_client.py` | `GeminiClient` (shared client under a lock, SDK retries), `OllamaClient` (httpx), prompts, `Reply`, `ModelError`, structured `MemoryNote` |
+| `ai_client.py` | `GeminiClient` (shared client under a lock, SDK retries), prompts, `Reply`, `ModelError`, structured `MemoryNote` |
 | `simulation.py` | Team loading/validation, turn-taking, failure benching, budget, memory scheduling |
 | `dynamics.py` | Pure Python, no model calls: mention/question parsing, `ObligationLedger`, `FairScheduler`, `RepetitionGuard` (shingles + Jaccard), `BM25` memory selection, `sanitize_post`, `conversation_metrics` |
 | `voice.py` | Gemini TTS to WAV, stable voice per bot, playback (pygame or paplay/aplay/afplay) |

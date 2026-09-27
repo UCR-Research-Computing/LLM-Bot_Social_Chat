@@ -1,4 +1,4 @@
-"""Model calls: Gemini (google-genai, async) and Ollama (HTTP API).
+"""Model calls: Gemini and Gemma 4 through the Gemini API (google-genai, async).
 
 Every call returns a `Reply` with text, token usage, cost and latency, or raises
 `ModelError` with a reason a person can act on. Nothing here writes to the database.
@@ -14,7 +14,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-import httpx
 from pydantic import BaseModel, Field
 
 from . import settings
@@ -350,90 +349,12 @@ def _short_error(e: Exception) -> str:
     return f"{code} {msg}" if code else msg
 
 
-# --------------------------------------------------------------------------- ollama
-
-
-class OllamaClient:
-    def __init__(self, base_url: str = settings.OLLAMA_URL):
-        self.base_url = base_url
-
-    async def list_models(self) -> list[str]:
-        try:
-            async with httpx.AsyncClient(timeout=3) as c:
-                r = await c.get(f"{self.base_url}/api/tags")
-                r.raise_for_status()
-                return sorted(m["name"] for m in r.json().get("models", []))
-        except Exception as e:
-            log.info("Ollama not reachable: %s", e)
-            return []
-
-    async def generate(
-        self,
-        model: str,
-        system: str,
-        prompt: str,
-        temperature: float | None = None,
-        max_tokens: int = MAX_POST_TOKENS,
-    ) -> Reply:
-        body: dict[str, Any] = {
-            "model": model,
-            "stream": False,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            "options": {"num_predict": max_tokens},
-            "think": False,
-        }
-        if temperature is not None:
-            body["options"]["temperature"] = temperature
-        t0 = time.monotonic()
-        data: dict[str, Any] = {}
-        for attempt in range(2):
-            try:
-                async with httpx.AsyncClient(timeout=180) as c:
-                    r = await c.post(f"{self.base_url}/api/chat", json=body)
-                if r.status_code == 400 and "think" in r.text and attempt == 0:
-                    body.pop("think", None)  # model without a thinking switch
-                    continue
-                if r.status_code == 404:
-                    raise ModelError(
-                        f"not pulled locally (run: ollama pull {model})", model
-                    )
-                r.raise_for_status()
-                data = r.json()
-                break
-            except ModelError:
-                raise
-            except httpx.ConnectError as e:
-                raise ModelError(
-                    f"Ollama is not running at {self.base_url}", model
-                ) from e
-            except Exception as e:
-                raise ModelError(_short_error(e), model) from e
-        text = ((data.get("message") or {}).get("content") or "").strip()
-        if not text:
-            raise ModelError("no text in reply", model)
-        return Reply(
-            text,
-            model,
-            int(data.get("prompt_eval_count") or 0),
-            int(data.get("eval_count") or 0),
-            0.0,
-            int((time.monotonic() - t0) * 1000),
-            str(data.get("done_reason") or ""),
-        )
-
-
 # --------------------------------------------------------------------------- facade
 
 
 class AIClient:
-    def __init__(
-        self, gemini: GeminiClient | None = None, ollama: OllamaClient | None = None
-    ):
+    def __init__(self, gemini: GeminiClient | None = None):
         self.gemini = gemini or GeminiClient()
-        self.ollama = ollama or OllamaClient()
 
     async def write_post(
         self,
@@ -450,15 +371,9 @@ class AIClient:
         prompt = conversation_prompt(
             recent_posts, bot.name, names, questions, avoid, closing
         )
-        info = settings.model_info(bot.model)
-        if info.provider == "ollama":
-            reply = await self.ollama.generate(
-                bot.model, system, prompt, bot.temperature
-            )
-        else:
-            reply, _ = await self.gemini.generate(
-                bot.model, system, prompt, bot.temperature
-            )
+        reply, _ = await self.gemini.generate(
+            bot.model, system, prompt, bot.temperature
+        )
         cleaned = sanitize_post(reply.text, bot.name, names, max_words=MAX_POST_WORDS)
         reply.text = cleaned.text
         reply.fixes = cleaned.fixes
@@ -469,18 +384,9 @@ class AIClient:
     async def form_memory(
         self, bot: Bot, recent_posts: Sequence[Post]
     ) -> tuple[MemoryNote | None, Reply | None]:
-        """Structured JSON memory. Uses a cheap Gemini model; Ollama bots use their own."""
+        """Structured JSON memory from a cheap Gemini model."""
         prompt = memory_prompt(bot, recent_posts)
         system = "You extract durable memories for a chat character. Reply in JSON."
-        info = settings.model_info(bot.model)
-        if info.provider == "ollama":
-            reply = await self.ollama.generate(
-                bot.model, system + " Keys: worth_keeping, key, value.", prompt
-            )
-            try:
-                return MemoryNote.model_validate_json(_json_block(reply.text)), reply
-            except Exception:
-                return None, reply
         if not self.gemini.configured:
             return None, None
         reply, parsed = await self.gemini.generate(
