@@ -1,45 +1,39 @@
-import os
-import logging
+"""Structured JSONL logging, one folder per run under the data dir."""
+
+from __future__ import annotations
+
 import datetime
-from pythonjsonlogger import jsonlogger
+import logging
+from pathlib import Path
+
+from pythonjsonlogger.json import JsonFormatter
+
+from . import settings
 
 
-def setup_logging():
-    """
-    Sets up a unique, timestamped directory for each simulation run,
-    containing a JSONL log file and a directory for audio output.
-    """
-    base_log_dir = "logs"
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(base_log_dir, f"sim_{timestamp}")
-    audio_dir = os.path.join(run_dir, "audio")
+def new_run_dir(base: Path | None = None) -> Path:
+    base = base or settings.RUNS_DIR
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run = base / f"sim_{stamp}"
+    n = 1
+    while run.exists():
+        n += 1
+        run = base / f"sim_{stamp}_{n}"
+    (run / "audio").mkdir(parents=True)
+    return run
 
-    os.makedirs(audio_dir, exist_ok=True)
 
-    log_filename = os.path.join(run_dir, "simulation.jsonl")
-
-    # Get the root logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
-    # Remove any existing handlers to avoid duplicate logs
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-
-    # Create a file handler for the new log file
-    log_handler = logging.FileHandler(log_filename)
-
-    # Create a JSON formatter
-    formatter = jsonlogger.JsonFormatter(
-        "%(asctime)s %(name)s %(levelname)s %(message)s"
-    )
-    log_handler.setFormatter(formatter)
-
-    # Add the handler to the root logger
-    logger.addHandler(log_handler)
-
-    logging.info(
-        "Structured logging initialized.",
-        extra={"event": "system.init", "run_dir": run_dir},
-    )
-    return run_dir
+def setup_logging(run_dir: Path | None = None, level: int = logging.INFO) -> Path:
+    """Send all logging to <run>/simulation.jsonl (and nothing to the terminal)."""
+    run = run_dir or new_run_dir()
+    root = logging.getLogger()
+    root.setLevel(level)
+    for h in root.handlers[:]:
+        root.removeHandler(h)
+    fh = logging.FileHandler(run / "simulation.jsonl")
+    fh.setFormatter(JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    root.addHandler(fh)
+    for noisy in ("httpx", "httpcore", "google_genai", "google.genai"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    logging.info("logging started", extra={"event": "system.init", "run_dir": str(run)})
+    return run

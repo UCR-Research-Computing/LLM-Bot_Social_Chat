@@ -21,20 +21,12 @@ If you're ready to contribute code, here's how to get started:
 2.  **Create a Feature Branch:** `git checkout -b feature/YourAmazingFeature`
 3.  **Set Up Your Environment:**
     ```bash
-    # It is recommended to run the environment check script first
-    ./check_environment.sh
-
-    # Create a virtual environment
-    python3 -m venv venv
-    source venv/bin/activate
-
-    # Install dependencies
-    pip install -r requirements.txt
+    uv sync
     ```
 4.  **Make Your Changes:** Write your code and add new tests for your feature.
 5.  **Run Local Checks:** Before committing, run all local checks to ensure your code meets our quality standards.
     ```bash
-    ./run_checks.sh
+    uv run ruff check . --fix && uv run ruff format . && uv run mypy src && uv run pytest
     ```
 6.  **Commit Your Changes:** Use a clear and descriptive commit message.
 7.  **Push to Your Branch:** `git push origin feature/YourAmazingFeature`

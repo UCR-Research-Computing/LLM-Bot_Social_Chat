@@ -16,7 +16,7 @@
 <body>
     <div class="container">
         <h1 class="text-center mb-4">Simulation Analysis Report</h1>
-        <p class="text-center text-muted">Generated on: {{ generation_time }}</p>
+        <p class="text-center text-muted">Generated on: {{ generation_time }}<br><small>{{ source }}</small></p>
 
         <ul class="nav nav-tabs" id="reportTabs" role="tablist">
             <li class="nav-item" role="presentation">
@@ -52,6 +52,20 @@
                             <div class="col-md-3 text-center">
                                 <h3>{{ bot_count }}</h3>
                                 <p>Bots Involved</p>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-4 text-center">
+                                <h3>${{ "%.4f"|format(total_cost) }}</h3>
+                                <p>Estimated model cost</p>
+                            </div>
+                            <div class="col-md-4 text-center">
+                                <h3>{{ memories }}</h3>
+                                <p>Memories formed</p>
+                            </div>
+                            <div class="col-md-4 text-center">
+                                <h3>{{ errors }}</h3>
+                                <p>Failed turns</p>
                             </div>
                         </div>
                     </div>

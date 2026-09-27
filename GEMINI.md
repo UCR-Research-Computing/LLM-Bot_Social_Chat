@@ -1,65 +1,30 @@
 # Project Overview
 
-This project is a Terminal User Interface (TUI) application that simulates a social network for AI bots. It allows users to create, manage, and observe AI bots with distinct personas as they interact with each other in a chat-like environment. The application is built using Python and the `textual` library.
+Bot Social Network is a Textual TUI (plus a headless runner) where AI bots with personas chat
+in a shared feed, form memories, and can speak with Gemini TTS. Models: Gemini 3.x and Gemma 4
+through the Gemini API (google-genai), or local Ollama models over its HTTP API.
 
-The core functionality involves bots generating posts based on their personas and the recent conversation history. The application supports both Gemini and Ollama as language model providers, allowing for flexibility in AI model selection.
+## Layout (`src/bot_social_network/`)
 
-## Key Technologies
+| Module | Role |
+|---|---|
+| `settings.py` | Paths (config/data dirs), model catalog with prices and thinking mode, legacy model map, voices |
+| `database.py` | SQLAlchemy models; `Database` with one engine (WAL) and a session per operation; column migration for old DBs |
+| `ai_client.py` | `GeminiClient` (shared client under a lock, SDK retries), `OllamaClient` (httpx), prompts, `Reply`, `ModelError`, structured `MemoryNote` |
+| `simulation.py` | Team loading/validation, turn-taking, failure benching, budget, memory scheduling |
+| `voice.py` | Gemini TTS to WAV, stable voice per bot, playback (pygame or paplay/aplay/afplay) |
+| `tui.py` | Textual app |
+| `headless.py` | Terminal runner with Rich output and a summary |
+| `analyzer.py` | HTML report from `simulation.jsonl` |
+| `cli.py` | `bot-social-network` entry point and subcommands |
+| `configs/` | Bundled teams |
 
-*   **Python:** The core programming language.
-*   **Textual:** A TUI framework for building rich interactive terminal applications.
-*   **SQLAlchemy:** A SQL toolkit and Object-Relational Mapper (ORM) for database interactions.
-*   **SQLite:** The backend database for storing bot and post information.
-*   **Google Gemini & Ollama:** The supported language model providers for generating bot responses.
+## Rules
 
-## Architecture
-
-The application is composed of three main Python files:
-
-*   `main.py`: The entry point of the application. It defines the TUI layout and handles user interactions.
-*   `ai_client.py`: Manages the communication with the language model providers (Gemini and Ollama). It's responsible for generating bot posts based on prompts.
-*   `database.py`: Defines the database schema using SQLAlchemy and manages the connection to the SQLite database.
-
-The data for the bots' personas and models is stored in a `bots.json` file, which can be loaded into and saved from the application.
-
-# Building and Running
-
-## Prerequisites
-
-*   Python 3
-*   The required Python packages can be installed from the `requirements.txt` file:
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-## Running the Application
-
-The application can be run from the terminal with the following command:
-
-```bash
-python3 main.py
-```
-
-### Language Model Selection
-
-By default, the application uses Gemini as the language model provider. To use Ollama, you can use the `--llm` flag:
-
-```bash
-python3 main.py --llm ollama
-```
-
-**Note:** To use the Gemini API, you need to have a `GEMINI_API_KEY` set in a `.env` file in the project's root directory.
-
-# Development Conventions
-
-## Code Style
-
-The code follows standard Python conventions (PEP 8). It is well-structured and modular, with clear separation of concerns between the UI, AI client, and database.
-
-## Database
-
-The application uses a SQLite database (`bots.db`) to store bot and post information. The database schema is defined in `database.py` using SQLAlchemy's ORM.
-
-## Bot Personas
-
-Bot personas are defined in the `bots.json` file. Each bot has a `name`, `persona`, and `model`. The `persona` is a detailed description of the bot's personality and communication style, which is used to generate its posts.
+- Tests never call a paid API; fake the clients. `tests/conftest.py` isolates settings paths
+  and the key.
+- Model ids must exist in the live model list; update `settings.GEMINI_MODELS` (with prices,
+  thinking mode and thinking room) and `LEGACY_MODEL_MAP` together.
+- Thinking tokens count against `max_output_tokens`; keep `think_room` for models that think,
+  or replies are cut off mid-sentence.
+- Gauntlet: `uv run ruff check . --fix && uv run ruff format . && uv run mypy src && uv run pytest`.

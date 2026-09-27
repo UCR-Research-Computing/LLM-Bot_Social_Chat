@@ -1,83 +1,93 @@
-from bot_social_network.database import Bot, Post, Memory
+import sqlite3
+
+from bot_social_network.database import Database, Post
 
 
-def test_create_bot(db_session):
-    """Tests that a Bot can be created and added to the database."""
-    new_bot = Bot(name="DataBot", persona="A bot for testing data.")
-    db_session.add(new_bot)
-    db_session.commit()
-
-    retrieved_bot = db_session.query(Bot).filter_by(name="DataBot").first()
-    assert retrieved_bot is not None
-    assert retrieved_bot.name == "DataBot"
-
-
-def test_create_post(db_session):
-    """Tests that a Post can be created and linked to a Bot."""
-    bot = Bot(name="PostBot", persona="A bot that posts.")
-    db_session.add(bot)
-    db_session.commit()
-
-    new_post = Post(content="This is a test post.", bot=bot)
-    db_session.add(new_post)
-    db_session.commit()
-
-    retrieved_post = (
-        db_session.query(Post).filter_by(content="This is a test post.").first()
+def test_team_round_trip(db):
+    db.replace_team(
+        [
+            {
+                "name": "A",
+                "persona": "p",
+                "model": "gemini-3.8-flash",
+                "voice": "Kore",
+                "temperature": 0.7,
+                "memories": [{"key": "k", "value": "v"}],
+            },
+            {"name": "B", "persona": "q", "model": "gemma4:e4b"},
+        ]
     )
-    assert retrieved_post is not None
-    assert retrieved_post.bot == bot
+    team = db.export_team()
+    assert [b["name"] for b in team] == ["A", "B"]
+    assert team[0]["voice"] == "Kore" and team[0]["temperature"] == 0.7
+    assert team[0]["memories"] == [{"key": "k", "value": "v"}]
+    assert "memories" not in team[1]
 
 
-def test_create_memory(db_session):
-    """Tests that a Memory can be created and linked to a Bot."""
-    bot = Bot(name="MemoryBot", persona="A bot with memories.")
-    db_session.add(bot)
-    db_session.commit()
-
-    new_memory = Memory(key="test_key", value="test_value", bot=bot)
-    db_session.add(new_memory)
-    db_session.commit()
-
-    retrieved_memory = db_session.query(Memory).filter_by(key="test_key").first()
-    assert retrieved_memory is not None
-    assert retrieved_memory.bot == bot
+def test_replace_team_clears_posts_and_memories(db):
+    db.replace_team([{"name": "A", "persona": "p", "model": "m"}])
+    a = db.bot("A")
+    db.add_post(content="hi", sender="A", bot_id=a.id)
+    db.add_memory(a.id, "k", "v")
+    db.replace_team([{"name": "Z", "persona": "p", "model": "m"}])
+    assert db.recent_posts() == []
+    assert [b.name for b in db.bots()] == ["Z"]
 
 
-def test_clear_posts_table(db_session):
-    """Tests that the clear_posts_table function works correctly."""
-    # Note: clear_posts_table uses the global session in database.py.
-    # To test logic here with the fixture, we simulate the action.
-    bot = Bot(name="ClearBot", persona="A bot for clearing.")
-    post1 = Post(content="Post 1", bot=bot)
-    post2 = Post(content="Post 2", bot=bot)
-    db_session.add_all([bot, post1, post2])
-    db_session.commit()
-
-    assert db_session.query(Post).count() == 2
-
-    db_session.query(Post).delete()
-    db_session.commit()
-
-    assert db_session.query(Post).count() == 0
+def test_post_metrics_and_totals(db):
+    db.add_post(content="x", sender="A", tokens_in=10, tokens_out=5, cost_usd=0.001)
+    db.add_post(content="y", sender="SYSTEM", error="boom")
+    t = db.run_totals()
+    assert t["posts"] == 2 and t["tokens_in"] == 10
+    assert abs(t["cost_usd"] - 0.001) < 1e-9
+    newest = db.recent_posts(1)[0]
+    assert isinstance(newest, Post) and newest.error == "boom"
 
 
-def test_bot_deletion_cascade(db_session):
-    """
-    Tests that when a Bot is deleted, its associated Posts and Memories are also deleted.
-    """
-    bot = Bot(name="CascadeBot", persona="A bot for cascading.")
-    post = Post(content="Cascade post.", bot=bot)
-    memory = Memory(key="cascade_key", value="cascade_value", bot=bot)
-    db_session.add_all([bot, post, memory])
-    db_session.commit()
+def test_delete_bot_cascades(db):
+    db.replace_team([{"name": "A", "persona": "p", "model": "m"}])
+    a = db.bot("A")
+    db.add_post(content="hi", sender="A", bot_id=a.id)
+    db.add_memory(a.id, "k", "v")
+    db.delete_bot(a.id)
+    assert db.bots() == [] and db.recent_posts() == []
 
-    assert db_session.query(Post).count() == 1
-    assert db_session.query(Memory).count() == 1
 
-    db_session.delete(bot)
-    db_session.commit()
+def test_memories_returns_newest_limit_oldest_first(db):
+    db.replace_team([{"name": "A", "persona": "p", "model": "m"}])
+    a = db.bot("A")
+    for i in range(5):
+        db.add_memory(a.id, f"k{i}", "v")
+    assert [m.key for m in db.memories(a.id, limit=3)] == ["k2", "k3", "k4"]
 
-    assert db_session.query(Bot).count() == 0
-    assert db_session.query(Post).count() == 0
-    assert db_session.query(Memory).count() == 0
+
+def test_old_v01_database_is_migrated(tmp_path):
+    """A v0.1 bots.db (no new columns) opens, keeps its data and gains the columns."""
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.executescript(
+        """
+        CREATE TABLE bots (id INTEGER PRIMARY KEY, name VARCHAR(255) UNIQUE NOT NULL,
+                           persona TEXT NOT NULL, model VARCHAR(255));
+        CREATE TABLE posts (id INTEGER PRIMARY KEY, content TEXT, bot_id INTEGER,
+                            sender VARCHAR(255));
+        CREATE TABLE memories (id INTEGER PRIMARY KEY, key VARCHAR(255) NOT NULL,
+                               value TEXT NOT NULL, bot_id INTEGER NOT NULL);
+        INSERT INTO bots VALUES (1, 'Old', 'persona', 'gemini-1.5-flash');
+        INSERT INTO posts VALUES (1, 'hello', 1, 'Old');
+        """
+    )
+    con.close()
+    d = Database(f"sqlite:///{path}")
+    p = d.recent_posts()[0]
+    assert p.content == "hello" and p.cost_usd is None
+    assert d.bot("Old").voice is None
+    d.close()
+
+
+def test_file_database_uses_wal(tmp_path):
+    d = Database(f"sqlite:///{tmp_path / 'x.db'}")
+    d.bots()
+    with d.engine.connect() as c:
+        assert c.exec_driver_sql("PRAGMA journal_mode").scalar() == "wal"
+    d.close()

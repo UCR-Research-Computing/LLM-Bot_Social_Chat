@@ -1,149 +1,299 @@
-import pytest
 import asyncio
-from unittest.mock import patch, MagicMock, AsyncMock
+from types import SimpleNamespace
 
-from bot_social_network.database import Bot, Post, Memory
+import httpx
+import pytest
+
+from bot_social_network import settings
 from bot_social_network.ai_client import (
-    _build_prompt,
-    _build_memory_prompt,
-    generate_post_gemini,
-    generate_post_ollama,
+    AIClient,
+    GeminiClient,
+    MemoryNote,
+    ModelError,
+    OllamaClient,
+    clean_post,
+    conversation_prompt,
+    system_prompt,
 )
+from bot_social_network.database import Bot, Memory, Post
 
 
 @pytest.fixture
-def sample_bot():
-    """Provides a sample Bot object for testing."""
-    return Bot(name="TestBot", persona="A test persona.", model="test_model")
+def bot():
+    return Bot(name="Dan", persona="An HPC engineer.", model="gemini-3.8-flash")
 
 
-# --- Test Core Prompt Building ---
+# ---- prompts ---------------------------------------------------------------
 
 
-def test_build_prompt_no_history_no_memories(sample_bot):
-    """
-    Tests that the prompt is correctly generated for a bot with no memories and no post history.
-    """
-    prompt = _build_prompt(sample_bot, [], [], [])
-    assert "You are an AI named TestBot." in prompt
-    assert "Your persona is: 'A test persona.'." in prompt
-    assert "Here are some of your core memories and beliefs:" not in prompt
-    assert "Here are the recent posts in the conversation:" not in prompt
-    assert "What is on your mind?" in prompt
+def test_system_prompt_has_persona_members_and_memories(bot):
+    s = system_prompt(bot, ["Steve", "Mike"], [Memory(key="goal", value="uptime")])
+    assert "You are Dan" in s and "An HPC engineer." in s
+    assert "@Steve, @Mike" in s
+    assert "- goal: uptime" in s
 
 
-def test_build_prompt_with_memories(sample_bot):
-    """
-    Tests that the prompt correctly includes the bot's memories.
-    """
-    memories = [
-        Memory(key="favorite_color", value="blue"),
-        Memory(key="mission", value="To boldly go where no bot has gone before."),
+def test_conversation_prompt_orders_oldest_first_and_skips_errors(bot):
+    posts = [  # newest first, as stored
+        Post(sender="Steve", content="second"),
+        Post(sender="SYSTEM", content="Mike could not post", error="429"),
+        Post(sender="Mike", content="first"),
     ]
-    prompt = _build_prompt(sample_bot, [], [], memories)
-    assert "Here are some of your core memories and beliefs:" in prompt
-    assert "- favorite_color: blue" in prompt
-    assert "- mission: To boldly go where no bot has gone before." in prompt
+    p = conversation_prompt(posts, "Dan")
+    assert p.index("@Mike: first") < p.index("@Steve: second")
+    assert "could not post" not in p
+    assert p.endswith("Write Dan's next post.")
 
 
-def test_build_prompt_with_history(sample_bot):
-    """
-    Tests that the prompt correctly includes the recent post history.
-    """
-    posts = [
-        Post(sender="Alice", content="Hello, world!"),
-        Post(sender="Bob", content="This is a test."),
-    ]
-    prompt = _build_prompt(sample_bot, ["Alice", "Bob"], posts, [])
-    assert "Here are the recent posts in the conversation:" in prompt
-    assert "- @Alice: Hello, world!" in prompt
-    assert "- @Bob: This is a test." in prompt
+def test_conversation_prompt_empty_chat(bot):
+    assert "chat is empty" in conversation_prompt([], "Dan")
 
 
-def test_build_prompt_with_everything(sample_bot):
-    """
-    Tests that the prompt is correctly generated with memories, history, and other bots.
-    """
-    memories = [Memory(key="home_planet", value="Cybertron")]
-    posts = [Post(sender="Alice", content="First post!")]
-    other_bots = ["Alice", "Charlie"]
+@pytest.mark.parametrize(
+    "raw, want",
+    [
+        ("Dan: hello @Steve", "hello @Steve"),
+        ("@Dan: hi", "hi"),
+        ('"quoted"', "quoted"),
+        ("  plain  ", "plain"),
+        ("Daniel: not me", "Daniel: not me"),
+    ],
+)
+def test_clean_post(raw, want):
+    assert clean_post(raw, "Dan") == want
 
-    prompt = _build_prompt(sample_bot, other_bots, posts, memories)
 
-    assert "You are in a conversation with: @Alice, @Charlie." in prompt
-    assert "Here are some of your core memories and beliefs:" in prompt
-    assert "- home_planet: Cybertron" in prompt
-    assert "Here are the recent posts in the conversation:" in prompt
-    assert "- @Alice: First post!" in prompt
-    assert (
-        "Based on these posts and your memories, what is your thoughtful reaction?"
-        in prompt
+# ---- gemini ----------------------------------------------------------------
+
+
+class FakeModels:
+    def __init__(self, resp=None, exc=None):
+        self.resp, self.exc, self.calls = resp, exc, []
+
+    async def generate_content(self, **kw):
+        self.calls.append(kw)
+        if self.exc:
+            raise self.exc
+        return self.resp
+
+
+def fake_resp(text, finish="STOP", tin=100, out=20, think=0, parsed=None):
+    return SimpleNamespace(
+        text=text,
+        parsed=parsed,
+        candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name=finish))],
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=tin,
+            candidates_token_count=out,
+            thoughts_token_count=think,
+        ),
+        prompt_feedback=None,
     )
 
 
-def test_build_memory_prompt(sample_bot):
-    """
-    Tests that the memory generation prompt is correctly constructed.
-    """
-    posts = [
-        Post(sender="Alice", content="What is the meaning of life?"),
-        Post(sender="TestBot", content="42, obviously."),
-    ]
-    prompt = _build_memory_prompt(sample_bot, posts)
-    assert "You are an AI named TestBot." in prompt
-    assert "You have just participated in a conversation." in prompt
-    assert "- @TestBot: 42, obviously." in prompt
-    assert "- @Alice: What is the meaning of life?" in prompt
-    assert "Generate a new memory in the format 'key: value'." in prompt
+def gemini_with(models):
+    g = GeminiClient(api_key="x")
+    g._client = SimpleNamespace(aio=SimpleNamespace(models=models))
+    return g
 
 
-# --- Test AI Client Functions ---
+def test_gemini_reply_cost_and_config(bot):
+    models = FakeModels(
+        fake_resp("Hi @Steve", tin=1_000_000, out=100_000, think=100_000)
+    )
+    ai = AIClient(gemini=gemini_with(models))
+    r = asyncio.run(ai.write_post(bot, ["Steve"], [], []))
+    assert r.text == "Hi @Steve"
+    # 3.8 Flash: $0.75 in, $3.75 out (thinking billed as output)
+    assert r.cost_usd == pytest.approx(0.75 + 0.2 * 3.75)
+    cfg = models.calls[0]["config"]
+    assert cfg.thinking_config.thinking_budget == 0  # Flash: no thinking for chat
+    assert "You are Dan" in cfg.system_instruction
+    assert cfg.automatic_function_calling.disable is True
 
 
-@patch("bot_social_network.ai_client.genai.GenerativeModel")
-def test_generate_post_gemini(mock_genai_model, sample_bot):
-    """
-    Tests the Gemini API call, mocking the genai library.
-    """
-    # Arrange: Set up the mock to return a predictable response
-    mock_response = MagicMock()
-    mock_response.text = "This is a test response from Gemini."
-
-    mock_model_instance = MagicMock()
-    mock_model_instance.generate_content_async = AsyncMock(return_value=mock_response)
-    mock_genai_model.return_value = mock_model_instance
-
-    # Act: Call the async function using asyncio.run
-    response_text, prompt = asyncio.run(generate_post_gemini(sample_bot, [], [], []))
-
-    # Assert: Check that the function returned the expected text
-    assert response_text == "This is a test response from Gemini."
-    assert "You are an AI named TestBot" in prompt
-    mock_genai_model.assert_called_with(sample_bot.model)
-    mock_model_instance.generate_content_async.assert_called_once()
+def test_pro_uses_low_thinking_and_extra_room(bot):
+    bot.model = "gemini-3.1-pro-preview"
+    models = FakeModels(fake_resp("ok"))
+    asyncio.run(AIClient(gemini=gemini_with(models)).write_post(bot, [], [], []))
+    cfg = models.calls[0]["config"]
+    assert cfg.thinking_config.thinking_level.name == "LOW"
+    assert cfg.max_output_tokens > 2000
 
 
-@patch("bot_social_network.ai_client.subprocess.run")
-def test_generate_post_ollama(mock_subprocess_run, sample_bot):
-    """
-    Tests the Ollama system call, mocking the subprocess.run call.
-    """
-    # Arrange: Set up the mock to return a predictable response
-    mock_process_result = MagicMock()
-    mock_process_result.stdout = "This is a test response from Ollama."
-    mock_process_result.stderr = ""
-    mock_process_result.returncode = 0
-    mock_subprocess_run.return_value = mock_process_result
+def test_gemma_uses_minimal_thinking(bot):
+    bot.model = "gemma-4-31b-it"
+    models = FakeModels(fake_resp("ok"))
+    asyncio.run(AIClient(gemini=gemini_with(models)).write_post(bot, [], [], []))
+    assert models.calls[0]["config"].thinking_config.thinking_level.name == "MINIMAL"
 
-    # Act: Call the async function using asyncio.run
-    response_text, prompt = asyncio.run(generate_post_ollama(sample_bot, [], [], []))
 
-    # Assert: Check that the function returned the expected text
-    assert response_text == "This is a test response from Ollama."
-    assert "You are an AI named TestBot" in prompt
-    # Note: ai_client._run_ollama_sync calls subprocess.run
-    # Since we mock subprocess.run, it should be called.
-    # However, since generate_post_ollama runs in a thread pool,
-    # mocking subprocess.run at the module level might be tricky if imports are already bound.
-    # But since we patched 'bot_social_network.ai_client.subprocess.run', it should work.
-    mock_subprocess_run.assert_called_once()
+class SeqModels(FakeModels):
+    def __init__(self, resps):
+        super().__init__()
+        self.resps = list(resps)
+
+    async def generate_content(self, **kw):
+        self.calls.append(kw)
+        return self.resps.pop(0)
+
+
+def test_truncated_by_thinking_retries_with_more_room(bot):
+    # Measured on 3.8 Flash: thinking used ~380 of 400 tokens, reply cut mid-sentence.
+    cut = fake_resp(
+        "Mortal monarchs love their", finish="MAX_TOKENS", out=11, think=385
+    )
+    full = fake_resp("Mortal monarchs love their seals.", out=20, think=300)
+    models = SeqModels([cut, full])
+    r = asyncio.run(AIClient(gemini=gemini_with(models)).write_post(bot, [], [], []))
+    assert r.text == "Mortal monarchs love their seals."
+    assert len(models.calls) == 2
+    first, second = (c["config"].max_output_tokens for c in models.calls)
+    assert second > first
+    assert r.tokens_out == 11 + 385 + 20 + 300  # both attempts billed
+
+
+def test_default_flash_reserves_thinking_room(bot):
+    models = FakeModels(fake_resp("ok"))
+    asyncio.run(AIClient(gemini=gemini_with(models)).write_post(bot, [], [], []))
+    assert models.calls[0]["config"].max_output_tokens >= 1500
+
+
+def test_empty_reply_raises_with_finish_reason(bot):
+    ai = AIClient(gemini=gemini_with(FakeModels(fake_resp("", finish="SAFETY"))))
+    with pytest.raises(ModelError, match="SAFETY"):
+        asyncio.run(ai.write_post(bot, [], [], []))
+
+
+def test_api_error_becomes_short_reason(bot):
+    exc = Exception("quota")
+    exc.code = 429  # type: ignore[attr-defined]
+    ai = AIClient(gemini=gemini_with(FakeModels(exc=exc)))
+    with pytest.raises(ModelError) as e:
+        asyncio.run(ai.write_post(bot, [], [], []))
+    assert "429 rate limited" in e.value.reason
+
+
+def test_missing_key_is_a_clear_error(bot, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY")
+    ai = AIClient(gemini=GeminiClient())
+    assert not ai.gemini.configured
+    with pytest.raises(ModelError, match="GEMINI_API_KEY is not set"):
+        asyncio.run(ai.write_post(bot, [], [], []))
+
+
+def test_structured_memory(bot):
+    note = MemoryNote(worth_keeping=True, key="Steve", value="wants TPUs")
+    models = FakeModels(fake_resp('{"x":1}', parsed=note))
+    ai = AIClient(gemini=gemini_with(models))
+    got, reply = asyncio.run(
+        ai.form_memory(bot, [Post(sender="Steve", content="TPUs!")])
+    )
+    assert got == note and reply is not None
+    cfg = models.calls[0]["config"]
+    assert models.calls[0]["model"] == settings.MEMORY_MODEL
+    assert cfg.response_mime_type == "application/json"
+
+
+def test_client_created_once_across_threads(monkeypatch):
+    import threading
+    import time
+
+    from google import genai
+
+    made = []
+
+    class Slow:
+        def __init__(self, **kw):
+            time.sleep(0.05)
+            made.append(self)
+
+    monkeypatch.setattr(genai, "Client", Slow)
+    g = GeminiClient(api_key="k")
+    got = []
+    ts = [threading.Thread(target=lambda: got.append(g.client())) for _ in range(4)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(made) == 1 and all(x is made[0] for x in got)
+
+
+# ---- ollama ----------------------------------------------------------------
+
+
+def ollama_with(handler):
+    transport = httpx.MockTransport(handler)
+    real = httpx.AsyncClient
+
+    class C(real):  # type: ignore[misc, valid-type]
+        def __init__(self, *a, **kw):
+            kw["transport"] = transport
+            super().__init__(*a, **kw)
+
+    return C
+
+
+def test_ollama_chat(monkeypatch, bot):
+    bot.model = "gemma4:e4b"
+    seen = {}
+
+    def handler(req):
+        seen["body"] = req.content
+        return httpx.Response(
+            200,
+            json={
+                "message": {"content": "Dan: local hello"},
+                "prompt_eval_count": 50,
+                "eval_count": 7,
+                "done_reason": "stop",
+            },
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", ollama_with(handler))
+    r = asyncio.run(
+        AIClient(ollama=OllamaClient("http://x")).write_post(bot, [], [], [])
+    )
+    assert r.text == "local hello" and r.cost_usd == 0 and r.tokens_out == 7
+    assert b'"role":"system"' in seen["body"].replace(b" ", b"")
+
+
+def test_ollama_retries_without_think_flag(monkeypatch, bot):
+    bot.model = "llama3.2"
+    calls = []
+
+    def handler(req):
+        calls.append(req.content)
+        if b'"think"' in req.content:
+            return httpx.Response(400, text='{"error":"does not support think"}')
+        return httpx.Response(200, json={"message": {"content": "ok"}})
+
+    monkeypatch.setattr(httpx, "AsyncClient", ollama_with(handler))
+    r = asyncio.run(
+        AIClient(ollama=OllamaClient("http://x")).write_post(bot, [], [], [])
+    )
+    assert r.text == "ok" and len(calls) == 2
+
+
+def test_ollama_missing_model(monkeypatch, bot):
+    bot.model = "nope"
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        ollama_with(lambda r: httpx.Response(404, text="not found")),
+    )
+    with pytest.raises(ModelError, match="ollama pull nope"):
+        asyncio.run(
+            AIClient(ollama=OllamaClient("http://x")).write_post(bot, [], [], [])
+        )
+
+
+def test_ollama_down(monkeypatch, bot):
+    bot.model = "gemma4:e4b"
+
+    def handler(req):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "AsyncClient", ollama_with(handler))
+    with pytest.raises(ModelError, match="not running"):
+        asyncio.run(
+            AIClient(ollama=OllamaClient("http://x")).write_post(bot, [], [], [])
+        )

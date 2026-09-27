@@ -1,19 +1,24 @@
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from bot_social_network.database import Base
 
 
-@pytest.fixture(scope="function")
-def db_session():
-    """
-    Creates a new, in-memory SQLite database session for each test function.
-    This ensures that tests are isolated and don't interfere with each other.
-    """
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    yield session
-    session.close()
-    engine.dispose()
+@pytest.fixture(autouse=True)
+def isolate(tmp_path, monkeypatch):
+    """No test reads the real ~/.config key or writes to the real data dir."""
+    from bot_social_network import settings
+
+    monkeypatch.setattr(settings, "CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(settings, "USER_CONFIGS", tmp_path / "cfg" / "configs")
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(settings, "RUNS_DIR", tmp_path / "data" / "runs")
+    monkeypatch.setattr(settings, "DB_PATH", tmp_path / "data" / "bots.db")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+
+@pytest.fixture
+def db():
+    from bot_social_network.database import Database
+
+    d = Database("sqlite:///:memory:")
+    yield d
+    d.close()
