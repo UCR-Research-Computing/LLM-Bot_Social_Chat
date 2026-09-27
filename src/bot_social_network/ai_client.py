@@ -4,6 +4,7 @@ import subprocess
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor
 import os
+from pathlib import Path
 
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -11,6 +12,10 @@ from dotenv import load_dotenv
 from .database import Bot, Post, Memory
 
 # --- Load environment variables ---
+# Shell export wins, then ~/.config/bot-social-network/.env (where the installed CLI
+# keeps its key), then a ./.env in the current folder. load_dotenv never overrides a
+# variable that is already set, so the first source wins.
+load_dotenv(Path.home() / ".config" / "bot-social-network" / ".env")
 load_dotenv()
 
 # --- Thread Pool for blocking IO ---
