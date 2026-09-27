@@ -1,252 +1,365 @@
+"""The simulation engine shared by the TUI and headless runs.
+
+Turn-taking picks who speaks next: someone @mentioned in the last post first, then
+the bot that has been quiet longest (with some randomness), never the same bot
+twice in a row. A failed model call is recorded as a SYSTEM post with the reason and
+never crashes the loop; a bot that fails 3 times in a row is benched for 5 turns.
+"""
+
+from __future__ import annotations
+
 import asyncio
-import random
-import logging
-import os
 import json
-from typing import Optional, List, Tuple
+import logging
+import random
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
 
-from .database import Bot, Post, Memory, session, clear_posts_table
-from . import ai_client
-from . import voice_manager
-import subprocess
+from . import settings
+from .ai_client import AIClient, ModelError, gather_limited
+from .database import Bot, Database, Post
+
+log = logging.getLogger(__name__)
+
+MENTION_RE = re.compile(r"@([A-Za-z0-9_][A-Za-z0-9_.-]*)")
+MAX_FAILS = 3
+BENCH_TURNS = 5
 
 
-def get_available_models() -> List[Tuple[str, str]]:
-    """Gets a list of available models from Gemini and Ollama."""
+# --------------------------------------------------------------------------- teams
 
-    gemini_models = [
-        ("Gemini 1.5 Flash", "gemini-1.5-flash"),
-        ("Gemini 1.5 Pro", "gemini-1.5-pro"),
-        ("Gemini 2.5 Flash", "gemini-2.5-flash"),
-        ("Gemini 2.5 Pro", "gemini-2.5-pro"),
-    ]
 
-    ollama_models = []
+class TeamError(ValueError):
+    pass
+
+
+def list_teams() -> list[tuple[str, Path]]:
+    """(name, path) for user teams first, then bundled ones not overridden."""
+    seen: dict[str, Path] = {}
+    for d in (settings.USER_CONFIGS, settings.BUNDLED_CONFIGS):
+        if d.is_dir():
+            for p in sorted(d.glob("*.json")):
+                seen.setdefault(p.name, p)
+    return sorted(seen.items())
+
+
+def resolve_team(name_or_path: str) -> Path:
+    p = Path(name_or_path).expanduser()
+    if p.is_file():
+        return p
+    name = p.name if p.suffix == ".json" else p.name + ".json"
+    for d in (settings.USER_CONFIGS, settings.BUNDLED_CONFIGS, Path("configs")):
+        cand = d / name
+        if cand.is_file():
+            return cand
+    raise TeamError(
+        f"Team '{name_or_path}' not found. Available: "
+        + ", ".join(n for n, _ in list_teams())
+    )
+
+
+def load_team(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate a team file. Returns (bots, notes) where notes list model upgrades."""
     try:
-        result = subprocess.run(
-            ["ollama", "list"], capture_output=True, text=True, check=True
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise TeamError(f"{path.name}: {e}") from e
+    if isinstance(data, dict):
+        data = data.get("bots", [])
+    if not isinstance(data, list) or not data:
+        raise TeamError(f"{path.name}: expected a non-empty list of bots")
+    bots, notes, names = [], [], set()
+    for i, b in enumerate(data, 1):
+        if not isinstance(b, dict) or not b.get("name") or not b.get("persona"):
+            raise TeamError(f"{path.name}: bot #{i} needs 'name' and 'persona'")
+        name = str(b["name"]).strip()
+        if name in names:
+            raise TeamError(f"{path.name}: duplicate bot name '{name}'")
+        names.add(name)
+        old = b.get("model")
+        new = settings.upgrade_model(old)
+        if old and old != new:
+            notes.append(f"{name}: {old} -> {new}")
+        mems = [
+            {"key": str(m["key"]), "value": str(m["value"])}
+            for m in b.get("memories") or []
+            if isinstance(m, dict) and m.get("key") and m.get("value")
+        ]
+        temp = b.get("temperature")
+        bots.append(
+            {
+                "name": name,
+                "persona": str(b["persona"]),
+                "model": new,
+                "voice": b.get("voice"),
+                "temperature": float(temp) if temp is not None else None,
+                "memories": mems,
+            }
         )
-        lines = result.stdout.strip().split("\n")
-        if len(lines) > 1:
-            for line in lines[1:]:
-                parts = line.split()
-                if parts:
-                    model_name = parts[0].split(":")[0]
-                    ollama_models.append((model_name, model_name))
-    except (FileNotFoundError, subprocess.CalledProcessError) as e:
-        logging.warning(f"Could not list Ollama models: {e}")
-
-    return gemini_models + ollama_models
+    return bots, notes
 
 
-def _parse_memory_string(memory_string: Optional[str]) -> Optional[Tuple[str, str]]:
-    """Parses a 'key: value' string into a tuple, handling errors."""
-    if (
-        not memory_string
-        or memory_string.lower().strip() == "none"
-        or ":" not in memory_string
-    ):
-        return None
-    try:
-        key, value = memory_string.split(":", 1)
-        return key.strip(), value.strip()
-    except ValueError:
-        return None
+def save_team(db: Database, name: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._") or "team"
+    settings.ensure_dirs()
+    path = settings.USER_CONFIGS / f"{safe.removesuffix('.json')}.json"
+    path.write_text(json.dumps(db.export_team(), indent=2) + "\n")
+    return path
+
+
+# --------------------------------------------------------------------------- engine
+
+
+@dataclass
+class BotState:
+    fails: int = 0
+    benched_until: int = 0
+    last_turn: int = -1
+
+
+@dataclass
+class Stats:
+    posts: int = 0
+    errors: int = 0
+    memories: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float = 0.0
+    tts_cost_usd: float = 0.0
+    by_bot: dict[str, int] = field(default_factory=dict)
 
 
 class Simulation:
     def __init__(
         self,
-        config_file: str,
-        autostart: bool,
-        tts_enabled: bool,
-        clear_db: bool,
-        max_posts: Optional[int] = None,
-        duration: Optional[int] = None,
-        topic: Optional[str] = None,
+        db: Database,
+        ai: AIClient | None = None,
         deterministic: bool = False,
-        audio_dir: Optional[str] = None,
+        seed: int | None = None,
+        memory_every: int = 3,
+        budget_usd: float | None = None,
+        on_event: Callable[[str, dict[str, Any]], None] | None = None,
     ):
-        self.config_file = config_file
-        self.autostart = autostart
-        self.tts_enabled = tts_enabled
-        self.clear_db = clear_db
-        self.max_posts = max_posts
-        self.duration = duration
-        self.topic = topic
+        self.db = db
+        self.ai = ai or AIClient()
         self.deterministic = deterministic
-        self.audio_dir = audio_dir
+        self.rng = random.Random(seed)
+        self.memory_every = max(0, memory_every)
+        self.budget_usd = budget_usd
+        self.on_event = on_event or (lambda _e, _d: None)
+        self.turn = 0
+        self.state: dict[str, BotState] = {}
+        self.stats = Stats()
+        self.background: set[asyncio.Task[Any]] = set()
+        self._rr = 0
 
-        self.tts_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-        self.background_tasks: set[asyncio.Task] = set()
-        self.bot_names: List[str] = []
-        self.post_count = 0
-        self.next_bot_index = 0
+    # ---- setup ---------------------------------------------------------------
+    def load_team(self, name_or_path: str) -> list[str]:
+        path = resolve_team(name_or_path)
+        bots, notes = load_team(path)
+        self.db.replace_team(bots)
+        self.state.clear()
+        self.turn = 0
+        log.info(
+            "team loaded",
+            extra={"event": "config.load.success", "config_filename": path.name},
+        )
+        return notes
 
-        if self.clear_db:
-            clear_posts_table()
+    def inject_topic(self, topic: str) -> Post:
+        post = self.db.add_post(content=topic.strip(), sender="SYSTEM")
+        log.info("topic", extra={"event": "topic.injected", "topic": topic})
+        self.on_event("post", {"post": post})
+        return post
 
-    def run_task(self, coro):
-        task = asyncio.create_task(coro)
-        self.background_tasks.add(task)
-        task.add_done_callback(self.background_tasks.discard)
+    @property
+    def over_budget(self) -> bool:
+        return (
+            self.budget_usd is not None
+            and self.stats.cost_usd + self.stats.tts_cost_usd >= self.budget_usd
+        )
 
-    async def initialize(self):
-        """Initializes the simulation, loading bots and voices."""
-        await asyncio.to_thread(voice_manager.get_voices)
-        await self.load_bots_from_json(self.config_file)
-        if self.topic:
-            await self.inject_topic(self.topic)
-
-    async def run_bot_activity(self):
-        """The main loop for generating bot posts."""
-        bots = await asyncio.to_thread(session.query(Bot).all)
-        if not bots:
-            return
-
+    # ---- turn-taking ---------------------------------------------------------
+    def pick_speaker(self, bots: list[Bot], recent: list[Post]) -> Bot | None:
+        active = [
+            b
+            for b in bots
+            if self.state.setdefault(b.name, BotState()).benched_until <= self.turn
+        ]
+        if not active:
+            return None
         if self.deterministic:
-            bot_to_post = bots[self.next_bot_index]
-            self.next_bot_index = (self.next_bot_index + 1) % len(bots)
-        else:
-            bot_to_post = random.choice(bots)
+            bot = active[self._rr % len(active)]
+            self._rr += 1
+            return bot
+        last_sender = recent[0].sender if recent else None
+        pool = [b for b in active if b.name != last_sender] or active
+        if recent:
+            names = {b.name.lower(): b for b in pool}
+            mentioned = [
+                names[m.lower()]
+                for m in MENTION_RE.findall(recent[0].content or "")
+                if m.lower() in names
+            ]
+            if mentioned and self.rng.random() < 0.8:
+                return self.rng.choice(mentioned)
+        # Weight by turns since last spoke so quiet bots get the floor.
+        weights = [
+            1 + (self.turn - self.state[b.name].last_turn)
+            if self.state[b.name].last_turn >= 0
+            else self.turn + 2
+            for b in pool
+        ]
+        return self.rng.choices(pool, weights=weights, k=1)[0]
 
-        other_bot_names = [b.name for b in bots if b.name != bot_to_post.name]
-
-        recent_posts = await asyncio.to_thread(
-            session.query(Post).order_by(Post.id.desc()).limit(50).all
-        )
-
-        memories = await asyncio.to_thread(
-            session.query(Memory).filter_by(bot_id=bot_to_post.id).all
-        )
-
-        post_content, prompt = "", ""
+    # ---- one step ------------------------------------------------------------
+    async def step(self) -> Post | None:
+        bots = await asyncio.to_thread(self.db.bots)
+        if not bots:
+            return None
+        recent = await asyncio.to_thread(self.db.recent_posts, 50)
+        bot = self.pick_speaker(bots, recent)
+        if bot is None:
+            self.turn += 1
+            return None
+        st = self.state[bot.name]
+        others = [b.name for b in bots if b.name != bot.name]
+        memories = await asyncio.to_thread(self.db.memories, bot.id)
+        self.turn += 1
         try:
-            if bot_to_post.model.startswith("gemini"):
-                post_content, prompt = await ai_client.generate_post_gemini(
-                    bot_to_post, other_bot_names, recent_posts, memories
-                )
-            else:
-                post_content, prompt = await ai_client.generate_post_ollama(
-                    bot_to_post, other_bot_names, recent_posts, memories
-                )
-        except Exception as e:
-            post_content = f"[SYSTEM Error: {e}]"
-            logging.error(
-                "Error generating post",
+            reply = await self.ai.write_post(bot, others, recent, memories)
+        except ModelError as e:
+            st.fails += 1
+            self.stats.errors += 1
+            benched = st.fails >= MAX_FAILS
+            if benched:
+                st.benched_until = self.turn + BENCH_TURNS
+                st.fails = 0
+            msg = f"{bot.name} could not post ({e.reason})" + (
+                f"; benched for {BENCH_TURNS} turns" if benched else ""
+            )
+            post = await asyncio.to_thread(
+                self.db.add_post,
+                content=msg,
+                sender="SYSTEM",
+                model=bot.model,
+                error=e.reason,
+            )
+            log.warning(
+                msg,
                 extra={
                     "event": "post.generation.fail",
-                    "bot_name": bot_to_post.name,
-                    "error": str(e),
+                    "bot_name": bot.name,
+                    "error": e.reason,
                 },
             )
+            self.on_event("post", {"post": post})
+            return post
 
-        sender_name = (
-            "SYSTEM"
-            if post_content.startswith(("[Error", "[SYSTEM"))
-            else bot_to_post.name
+        st.fails = 0
+        st.last_turn = self.turn
+        post = await asyncio.to_thread(
+            self.db.add_post,
+            content=reply.text,
+            sender=bot.name,
+            bot_id=bot.id,
+            model=reply.model,
+            tokens_in=reply.tokens_in,
+            tokens_out=reply.tokens_out,
+            cost_usd=reply.cost_usd,
+            latency_ms=reply.latency_ms,
         )
-        new_post = await asyncio.to_thread(
-            self.create_post, post_content, sender_name, bot_to_post
-        )
-        self.post_count += 1
-
-        logging.info(
-            "Bot post generated",
+        s = self.stats
+        s.posts += 1
+        s.tokens_in += reply.tokens_in
+        s.tokens_out += reply.tokens_out
+        s.cost_usd += reply.cost_usd
+        s.by_bot[bot.name] = s.by_bot.get(bot.name, 0) + 1
+        log.info(
+            "post",
             extra={
                 "event": "post.generated",
-                "bot_name": bot_to_post.name,
-                "bot_model": bot_to_post.model,
-                "post_content": post_content,
-                "prompt": prompt,
+                "bot_name": bot.name,
+                "bot_model": reply.model,
+                "post_content": reply.text,
+                "tokens_in": reply.tokens_in,
+                "tokens_out": reply.tokens_out,
+                "cost_usd": reply.cost_usd,
+                "latency_ms": reply.latency_ms,
             },
         )
+        self.on_event("post", {"post": post})
+        if self.memory_every and s.by_bot[bot.name] % self.memory_every == 0:
+            self._spawn(self.form_memory(bot))
+        return post
 
-        # The calling script is now responsible for queuing.
-        self.run_task(self.form_new_memory(bot_to_post))
-        return new_post
-
-    async def form_new_memory(self, bot: Bot):
-        """Asks the AI to generate a new memory and saves it to the database."""
-        recent_posts = await asyncio.to_thread(
-            session.query(Post).order_by(Post.id.desc()).limit(5).all
-        )
-
-        new_memory_str = await ai_client.generate_new_memory(bot, recent_posts)
-
-        parsed_memory = _parse_memory_string(new_memory_str)
-        if parsed_memory:
-            key, value = parsed_memory
-            new_memory = Memory(key=key, value=value, bot=bot)
-            await asyncio.to_thread(self.db_add_memory, new_memory)
-            logging.info(
-                f"New memory for {bot.name}",
-                extra={
-                    "event": "memory.form.success",
-                    "bot_name": bot.name,
-                    "memory_key": key,
-                    "memory_value": value,
-                },
-            )
-        else:
-            logging.info(
-                f"No new memory formed for {bot.name}.",
+    async def form_memory(self, bot: Bot) -> None:
+        recent = await asyncio.to_thread(self.db.recent_posts, 6)
+        try:
+            note, reply = await self.ai.form_memory(bot, recent)
+        except ModelError as e:
+            log.info(
+                "memory failed",
                 extra={
                     "event": "memory.form.fail",
                     "bot_name": bot.name,
-                    "llm_response": new_memory_str,
+                    "error": e.reason,
                 },
             )
-
-    async def inject_topic(self, topic: str) -> Post:
-        new_post = await asyncio.to_thread(self.create_post, topic, "SYSTEM")
-        logging.info(
-            "Topic injected", extra={"event": "topic.injected", "topic": topic}
-        )
-        return new_post
-
-    def create_post(self, content, sender, bot=None):
-        new_post = Post(content=content, sender=sender, bot=bot)
-        session.add(new_post)
-        session.commit()
-        return new_post
-
-    async def load_bots_from_json(self, filename: str):
-        def _load():
-            filepath = os.path.join("configs", filename)
-            try:
-                with open(filepath, "r") as f:
-                    bots_data = json.load(f)
-                session.query(Post).delete()
-                session.query(Memory).delete()
-                session.query(Bot).delete()
-                for bot_data in bots_data:
-                    memories = bot_data.pop("memories", [])
-                    bot = Bot(**bot_data)
-                    session.add(bot)
-                    for memory_data in memories:
-                        memory = Memory(
-                            key=memory_data["key"], value=memory_data["value"], bot=bot
-                        )
-                        session.add(memory)
-                session.commit()
-                self.bot_names = [bot.name for bot in session.query(Bot).all()]
-                return None
-            except (FileNotFoundError, json.JSONDecodeError):
-                return "Error"
-
-        error = await asyncio.to_thread(_load)
-        if error:
-            logging.error(
-                f"Failed to load config file: {filename}",
-                extra={"event": "config.load.fail", "config_filename": filename},
+            return
+        if reply:
+            self.stats.cost_usd += reply.cost_usd
+        if note and note.worth_keeping and note.key.strip() and note.value.strip():
+            await asyncio.to_thread(
+                self.db.add_memory, bot.id, note.key.strip(), note.value.strip()
             )
-        else:
-            logging.info(
-                f"Successfully loaded config file: {filename}",
-                extra={"event": "config.load.success", "config_filename": filename},
+            self.stats.memories += 1
+            log.info(
+                "memory",
+                extra={
+                    "event": "memory.form.success",
+                    "bot_name": bot.name,
+                    "memory_key": note.key,
+                    "memory_value": note.value,
+                },
+            )
+            self.on_event(
+                "memory", {"bot": bot.name, "key": note.key, "value": note.value}
             )
 
-    def db_add_memory(self, memory: Memory):
-        session.add(memory)
-        session.commit()
+    def _spawn(self, coro: Any) -> None:
+        t = asyncio.create_task(coro)
+        self.background.add(t)
+        t.add_done_callback(self.background.discard)
+
+    async def drain(self, timeout: float = 20) -> None:
+        if self.background:
+            await asyncio.wait(list(self.background), timeout=timeout)
+
+    async def shutdown(self) -> None:
+        for t in list(self.background):
+            t.cancel()
+        await asyncio.gather(*self.background, return_exceptions=True)
+
+
+async def check_models(ai: AIClient, models: list[str]) -> dict[str, str]:
+    """Tiny live call per model; returns {model: 'ok' | reason}."""
+
+    async def one(m: str) -> str:
+        fake = Bot(name="Probe", persona="A terse tester.", model=m)
+        try:
+            r = await ai.write_post(fake, [], [], [])
+            return f"ok ({r.latency_ms} ms)"
+        except ModelError as e:
+            return e.reason
+
+    gem = [m for m in models if settings.model_info(m).provider == "gemini"]
+    loc = [m for m in models if m not in gem]
+    # Gemini in parallel; local models one at a time (each loads into RAM, and
+    # parallel loads on a laptop can swap for minutes).
+    res_g = await gather_limited([one(m) for m in gem], limit=4)
+    res_l = [await one(m) for m in loc]
+    res = dict(zip(gem + loc, res_g + res_l))
+    return {m: (r if isinstance(r, str) else str(r)) for m, r in res.items()}

@@ -1,9 +1,0 @@
-google-generativeai
-python-dotenv
-SQLAlchemy
-textual
-pytest
-pygame
-google-cloud-texttospeech
-python-json-logger
-ruff

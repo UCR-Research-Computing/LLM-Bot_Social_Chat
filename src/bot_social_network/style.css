@@ -2,74 +2,96 @@ Screen {
     layout: vertical;
 }
 
-Horizontal {
-    layout: horizontal;
-    height: auto;
-}
-
-#left-pane {
-    width: 30%;
-    padding: 1;
-    border-right: solid $accent;
-}
-
-#right-pane {
-    width: 70%;
-    padding: 1;
-    layout: vertical;
-}
-
-BotManager {
+Screen > Horizontal {
     height: 1fr;
-    margin-bottom: 1;
 }
 
-PostView {
+#left {
+    width: 34%;
+    min-width: 30;
+}
+
+#right {
+    width: 1fr;
+}
+
+#bots {
+    height: 12;
+    border: round $accent;
+}
+
+#botinfo {
     height: 1fr;
-    margin-bottom: 1;
-    overflow-y: scroll;
+    border: round $accent;
+    padding: 0 1;
+    overflow-y: auto;
 }
 
-PostView > ListItem {
-    height: auto;
+#feed {
+    height: 1fr;
+    border: round $primary;
+    padding: 0 1;
 }
 
-Input, Select {
-    margin-bottom: 1;
-    width: 100%;
+#topicbar {
+    height: 3;
 }
 
-TextArea {
-    height: 5;
-    margin-bottom: 1;
+#topic {
+    width: 1fr;
 }
 
-/* --- Modal Dialog --- */
+#status {
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+}
 
-BotEditScreen {
+/* --- dialogs --- */
+
+ModalScreen {
     align: center middle;
 }
 
 #dialog {
-    width: 60;
-    height: 18;
+    width: 72;
+    height: auto;
+    max-height: 90%;
     background: $surface;
-    padding: 1;
+    padding: 1 2;
     border: thick $primary;
 }
 
 #dialog > Label {
     width: 100%;
-    text-align: center;
     margin-bottom: 1;
 }
 
-#buttons {
+#dialog Input, #dialog Select {
+    margin-bottom: 1;
     width: 100%;
+}
+
+#dialog TextArea {
+    height: 8;
+    margin-bottom: 1;
+}
+
+.buttons {
+    width: 100%;
+    height: auto;
     align-horizontal: right;
     margin-top: 1;
 }
 
-#buttons > Button {
+.buttons > Button {
     margin-left: 1;
+}
+
+.error {
+    color: $error;
+}
+
+.dim {
+    color: $text-muted;
 }

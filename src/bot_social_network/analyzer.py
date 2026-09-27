@@ -1,19 +1,61 @@
-import json
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import networkx as nx
-from textblob import TextBlob  # type: ignore
-import re
+"""HTML report from a run's simulation.jsonl: activity, @mention graph, sentiment, cost."""
+
+from __future__ import annotations
+
 import base64
-from io import BytesIO
-from jinja2 import Environment, FileSystemLoader
-import argparse
-from datetime import datetime
+import json
 import os
+import re
+from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")  # no display needed (headless servers, CI)
+import matplotlib.pyplot as plt  # noqa: E402
+import networkx as nx  # noqa: E402
+import pandas as pd  # noqa: E402
+import seaborn as sns  # noqa: E402
+from jinja2 import Environment, FileSystemLoader, select_autoescape  # noqa: E402
+from textblob import TextBlob  # type: ignore  # noqa: E402
+
+from . import settings  # noqa: E402
+
+MENTION = re.compile(r"@([A-Za-z0-9_][A-Za-z0-9_.-]*)")
 
 
-def analyze_log(log_file_path):
+def resolve_log(arg: str) -> Path:
+    """'latest', a run folder, or a .jsonl path -> the simulation.jsonl to read."""
+    if arg == "latest":
+        # Folder names are sim_YYYYMMDD_HHMMSS[_n], so name order is time order.
+        runs = sorted(
+            p
+            for p in settings.RUNS_DIR.glob("sim_*")
+            if (p / "simulation.jsonl").exists()
+        )
+        if not runs:
+            raise FileNotFoundError(f"no runs in {settings.RUNS_DIR}")
+        return runs[-1] / "simulation.jsonl"
+    p = Path(arg).expanduser()
+    if p.is_dir():
+        p = p / "simulation.jsonl"
+    if not p.exists():
+        raise FileNotFoundError(str(p))
+    return p
+
+
+def analyze_cli(arg: str, output: str | None = None) -> int:
+    try:
+        log = resolve_log(arg)
+    except FileNotFoundError as e:
+        print(f"Log not found: {e}")
+        return 1
+    out = analyze_log(str(log), output)
+    return 0 if out else 1
+
+
+def analyze_log(log_file_path: str, output: str | None = None) -> str | None:
     print(f"Analyzing {log_file_path}...")
 
     data = []
@@ -25,14 +67,19 @@ def analyze_log(log_file_path):
                 continue
 
     df_raw = pd.DataFrame(data)
+    if df_raw.empty or "event" not in df_raw:
+        print("No posts found in log file.")
+        return None
 
     # Filter for posts
     posts_df = df_raw[df_raw["event"] == "post.generated"].copy()
     if posts_df.empty:
         print("No posts found in log file.")
-        return
+        return None
 
-    posts_df["asctime"] = pd.to_datetime(posts_df["asctime"])
+    posts_df["asctime"] = pd.to_datetime(
+        posts_df["asctime"], format="%Y-%m-%d %H:%M:%S,%f", errors="coerce"
+    )
 
     # Basic Stats
     total_posts = len(posts_df)
@@ -48,23 +95,38 @@ def analyze_log(log_file_path):
     avg_words_per_post = round(posts_df["word_count"].mean(), 2)
 
     # Bot Activity Table
+    for col in ("cost_usd", "latency_ms", "tokens_in", "tokens_out"):
+        if col not in posts_df:
+            posts_df[col] = 0
+        posts_df[col] = pd.to_numeric(posts_df[col], errors="coerce").fillna(0)
+    if "bot_model" not in posts_df:
+        posts_df["bot_model"] = ""
     bot_activity = (
         posts_df.groupby("bot_name")
-        .agg(posts=("event", "count"), avg_words=("word_count", "mean"))
-        .round(2)
+        .agg(
+            model=("bot_model", "last"),
+            posts=("event", "count"),
+            avg_words=("word_count", "mean"),
+            avg_latency_s=("latency_ms", lambda s: s.mean() / 1000),
+            cost_usd=("cost_usd", "sum"),
+        )
+        .round({"avg_words": 1, "avg_latency_s": 2, "cost_usd": 4})
         .reset_index()
     )
+    total_cost = round(float(posts_df["cost_usd"].sum()), 4)
+    errors = int((df_raw["event"] == "post.generation.fail").sum())
+    memories = int((df_raw["event"] == "memory.form.success").sum())
     bot_activity_html = bot_activity.to_html(classes="table table-striped", index=False)
 
     # Mentions & Interaction Graph
-    G = nx.DiGraph()
+    G: nx.DiGraph = nx.DiGraph()
     for bot in bot_names:
         G.add_node(bot)
 
     for _, row in posts_df.iterrows():
         sender = row["bot_name"]
         content = row["post_content"]
-        mentions = re.findall(r"@(\w+)", content)
+        mentions = MENTION.findall(str(content))
         for mention in mentions:
             if mention in bot_names and mention != sender:
                 if G.has_edge(sender, mention):
@@ -78,11 +140,10 @@ def analyze_log(log_file_path):
 
     # Normalize weights for edge widths
     weights = [G[u][v]["weight"] for u, v in G.edges()]
+    edge_widths: list[float] | float = 1.0
     if weights:
         max_weight = max(weights)
         edge_widths = [(w / max_weight) * 5 for w in weights]
-    else:
-        edge_widths = 1
 
     nx.draw_networkx_nodes(G, pos, node_size=2000, node_color="skyblue", alpha=0.8)
     nx.draw_networkx_labels(
@@ -138,7 +199,9 @@ def analyze_log(log_file_path):
 
     # Render Template
     template_dir = os.path.join(os.path.dirname(__file__), "templates")
-    env = Environment(loader=FileSystemLoader(template_dir))
+    env = Environment(
+        loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["html"])
+    )
     template = env.get_template("report_template.html")
 
     html_output = template.render(
@@ -150,23 +213,23 @@ def analyze_log(log_file_path):
         bot_activity_table=bot_activity_html,
         interaction_graph_base64=interaction_graph_base64,
         sentiment_plot_base64=sentiment_plot_base64,
+        total_cost=total_cost,
+        errors=errors,
+        memories=memories,
+        source=str(log_file_path),
     )
 
-    output_filename = "analysis_report.html"
+    output_filename = output or os.path.join(
+        os.path.dirname(os.path.abspath(log_file_path)), "analysis_report.html"
+    )
     with open(output_filename, "w") as f:
         f.write(html_output)
 
     print(f"Analysis complete! Report saved to {output_filename}")
+    return output_filename
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Analyze simulation logs and generate an HTML report."
-    )
-    parser.add_argument("log_file", help="Path to the simulation.jsonl file.")
-    args = parser.parse_args()
+    import sys
 
-    if os.path.exists(args.log_file):
-        analyze_log(args.log_file)
-    else:
-        print(f"Error: Log file not found at {args.log_file}")
+    sys.exit(analyze_cli(sys.argv[1] if len(sys.argv) > 1 else "latest"))
