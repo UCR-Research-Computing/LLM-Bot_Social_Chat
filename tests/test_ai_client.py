@@ -45,6 +45,59 @@ def test_conversation_prompt_orders_oldest_first_and_skips_errors(bot):
     assert p.endswith("Write Dan's next post.")
 
 
+NAMES = ["Captain Eva Rostova", "Commander Jax", "Zeke", "Dan"]
+
+
+@pytest.mark.parametrize(
+    "text, want",
+    [
+        ("@Captain Eva Rostova, status?", ["Captain Eva Rostova"]),
+        ("@Zeke @Commander Jax thoughts?", ["Zeke", "Commander Jax"]),
+        ("@zeke lower case works", ["Zeke"]),
+        ("@Danny is not Dan", []),
+        ("email me at a@Dan.com", ["Dan"]),  # boundary is '.', acceptable
+        ("no mentions here", []),
+        ("@Zeke and again @Zeke", ["Zeke"]),
+    ],
+)
+def test_mentions_handles_multiword_names(text, want):
+    from bot_social_network.ai_client import mentions
+
+    assert mentions(text, NAMES) == want
+
+
+def test_inbox_collects_mentions_since_last_post():
+    from bot_social_network.ai_client import inbox
+
+    posts = [  # newest first
+        Post(sender="Commander Jax", content="@Zeke how long is the flush?"),
+        Post(sender="Dan", content="unrelated"),
+        Post(sender="Captain Eva Rostova", content="@Zeke check the valves"),
+        Post(sender="Zeke", content="valves recalibrated"),
+        Post(sender="Dan", content="@Zeke old question already answered"),
+    ]
+    got = inbox(posts, "Zeke", NAMES)
+    assert [p.sender for p in got] == ["Captain Eva Rostova", "Commander Jax"]
+
+
+def test_prompt_tells_target_who_is_waiting(bot):
+    posts = [
+        Post(sender="Steve", content="@Dan can the racks take 8:1 GPU density?"),
+        Post(sender="Mike", content="Storage is the bottleneck."),
+    ]
+    p = conversation_prompt(posts, "Dan", ["Dan", "Steve", "Mike"])
+    assert "Addressed to you (Dan) since you last spoke:" in p
+    assert "- @Steve: @Dan can the racks take 8:1 GPU density?" in p
+    assert "Reply to @Steve first" in p
+
+
+def test_prompt_without_mention_points_at_latest_post(bot):
+    posts = [Post(sender="Mike", content="Storage is the bottleneck.")]
+    p = conversation_prompt(posts, "Dan", ["Dan", "Steve", "Mike"])
+    assert "Addressed to you" not in p
+    assert "The latest post is from @Mike" in p
+
+
 def test_conversation_prompt_empty_chat(bot):
     assert "chat is empty" in conversation_prompt([], "Dan")
 
