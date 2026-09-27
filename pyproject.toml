@@ -1,6 +1,6 @@
 [project]
 name = "bot-social-network"
-version = "0.2.0"
+version = "0.2.1"
 description = "A group chat of AI bots with personas, memories and voices (Gemini 3.x and Ollama), in the terminal."
 readme = "README.md"
 requires-python = ">=3.12"

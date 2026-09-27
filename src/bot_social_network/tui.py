@@ -229,12 +229,12 @@ class BotSocialApp(App[None]):
         self.interval = max(1.0, interval)
         self.running = False
         self.busy = False
+        self.speaking = False
         self.selected: str | None = None
         self.names: list[str] = []
         self.models: list[tuple[str, str]] = [
             (f"{m.label}  ({m.note})", m.id) for m in settings.GEMINI_MODELS
         ]
-        self.audio_q: asyncio.Queue[Post] = asyncio.Queue(maxsize=3)
 
     # ---- layout --------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -273,7 +273,6 @@ class BotSocialApp(App[None]):
         if self.topic:
             await asyncio.to_thread(self.sim.inject_topic, self.topic)
             await self.refresh_feed()
-        self.speaker()
         self.timer = self.set_interval(self.interval, self.tick, pause=True)
         if self.autostart:
             self.action_toggle_run()
@@ -361,7 +360,9 @@ class BotSocialApp(App[None]):
     def update_status(self) -> None:
         s = self.sim.stats
         state = "[green]RUNNING[/]" if self.running else "[yellow]PAUSED[/]"
-        if self.busy:
+        if self.speaking:
+            state += " [dim](speaking...)[/]"
+        elif self.busy:
             state += " [dim](writing...)[/]"
         budget = f" / ${self.sim.budget_usd:.2f}" if self.sim.budget_usd else ""
         self.query_one("#status", Static).update(
@@ -384,10 +385,16 @@ class BotSocialApp(App[None]):
             post = await self.sim.step()
             if post:
                 self.query_one("#feed", RichLog).write(self.render_post(post))
-                if self.tts and post.sender != "SYSTEM" and not self.audio_q.full():
-                    self.audio_q.put_nowait(post)
                 if post.sender == self.selected or post.sender == "SYSTEM":
                     self.show_bot()
+                # With voice on, speaking is part of the turn: the next post waits
+                # until this one has been read out (busy stays set, so timer ticks
+                # that fire meanwhile are skipped). No backlog can build up.
+                if self.tts and post.sender != "SYSTEM":
+                    await self.speak(post)
+                    # Restart the interval so the gap after a spoken post is the
+                    # full interval, not whatever was left on the timer.
+                    self.timer.reset()
         except Exception as e:  # never let a bad turn kill the timer
             logging.exception("tick failed")
             self.notify(f"Turn failed: {e}", severity="error")
@@ -395,23 +402,23 @@ class BotSocialApp(App[None]):
             self.busy = False
             self.update_status()
 
-    @work(exclusive=True, group="speaker")
-    async def speaker(self) -> None:
-        while True:
-            post = await self.audio_q.get()
-            if not self.tts:
-                continue
+    async def speak(self, post: Post) -> None:
+        self.speaking = True
+        self.update_status()
+        try:
             b = await asyncio.to_thread(self.db.bot, post.sender or "")
-            try:
-                sp = await self.voice.synthesize(
-                    post.content,
-                    voice_for(post.sender or "", b.voice if b else None),
-                    Path(self.run_dir) / "audio" / f"post_{post.id}.wav",
-                )
-                self.sim.stats.tts_cost_usd += sp.cost_usd
+            sp = await self.voice.synthesize(
+                post.content,
+                voice_for(post.sender or "", b.voice if b else None),
+                Path(self.run_dir) / "audio" / f"post_{post.id}.wav",
+            )
+            self.sim.stats.tts_cost_usd += sp.cost_usd
+            if self.tts:  # voice may have been switched off while synthesizing
                 await asyncio.to_thread(self.voice.play, sp.path)
-            except Exception as e:
-                self.notify(f"Voice failed: {e}", severity="warning")
+        except Exception as e:
+            self.notify(f"Voice failed: {e}", severity="warning")
+        finally:
+            self.speaking = False
 
     # ---- events --------------------------------------------------------------
     @on(ListView.Highlighted, "#bots")
@@ -437,8 +444,9 @@ class BotSocialApp(App[None]):
             self.timer.pause()
         self.update_status()
 
-    async def action_step(self) -> None:
-        await self.tick()
+    def action_step(self) -> None:
+        # Run as a worker so the UI stays responsive while a post is written/spoken.
+        self.run_worker(self.tick(), exclusive=False)
 
     def action_focus_topic(self) -> None:
         self.query_one("#topic", Input).focus()
