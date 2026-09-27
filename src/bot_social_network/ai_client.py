@@ -11,7 +11,7 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 import httpx
@@ -19,11 +19,13 @@ from pydantic import BaseModel, Field
 
 from . import settings
 from .database import Bot, Memory, Post
+from .dynamics import Obligation, find_mentions, sanitize_post
 
 log = logging.getLogger(__name__)
 
 MAX_POST_TOKENS = int(os.environ.get("BSN_MAX_POST_TOKENS", "400"))
 HISTORY_POSTS = 30
+MAX_POST_WORDS = 120  # hard cap; the prompt asks for under 80
 
 
 class ModelError(RuntimeError):
@@ -44,6 +46,7 @@ class Reply:
     cost_usd: float = 0.0
     latency_ms: int = 0
     finish: str = ""
+    fixes: list[str] = field(default_factory=list)  # sanitizer changes
 
 
 class MemoryNote(BaseModel):
@@ -81,25 +84,8 @@ def system_prompt(bot: Bot, others: Sequence[str], memories: Sequence[Memory]) -
 
 
 def mentions(text: str, names: Sequence[str]) -> list[str]:
-    """Member names @mentioned in text, in order. Handles multi-word names
-    ("@Captain Eva Rostova") by matching known names, longest first."""
-    low = (text or "").lower()
-    found: list[tuple[int, str]] = []
-    taken: set[int] = set()
-    for n in sorted(names, key=len, reverse=True):
-        start = 0
-        key = "@" + n.lower()
-        while (i := low.find(key, start)) >= 0:
-            end = i + len(key)
-            boundary = end == len(low) or not (low[end].isalnum() or low[end] == "_")
-            if boundary and i not in taken:
-                found.append((i, n))
-                taken.update(range(i, end))
-            start = end
-    seen: dict[str, None] = {}
-    for _, n in sorted(found):
-        seen.setdefault(n, None)
-    return list(seen)
+    """Member names @mentioned in text (see dynamics.find_mentions)."""
+    return find_mentions(text, names)
 
 
 def inbox(
@@ -124,6 +110,9 @@ def conversation_prompt(
     recent_posts: Sequence[Post],
     bot_name: str,
     names: Sequence[str] = (),
+    questions: Sequence[Obligation] = (),
+    avoid: str | None = None,
+    closing: bool = False,
 ) -> str:
     """recent_posts are newest first (as stored); render oldest first, then say
     exactly who is waiting on this bot and what the latest post is."""
@@ -147,11 +136,24 @@ def conversation_prompt(
             f"Reply to {askers} first: answer their questions directly and refer to "
             "what they actually said. Then add your own angle or a question."
         )
+    if questions:
+        parts.append("Questions you still owe an answer to (answer each one):")
+        parts += [f'- @{o.asker} asked: "{o.question}"' for o in questions]
     elif shown:
         last = shown[-1]
         parts.append(
             f"The latest post is from @{last.sender}. Respond to it or to an earlier "
             "point that still needs an answer, then move the conversation forward."
+        )
+    if avoid:
+        parts.append(
+            "Your draft repeated this earlier post too closely, so say something "
+            f'new and use different wording: "{avoid}"'
+        )
+    if closing:
+        parts.append(
+            "The chat is wrapping up. Give your answer and a closing thought; do not "
+            "ask anyone a new question."
         )
     parts.append(f"Write {bot_name}'s next post.")
     return "\n".join(parts)
@@ -439,9 +441,15 @@ class AIClient:
         others: Sequence[str],
         recent_posts: Sequence[Post],
         memories: Sequence[Memory],
+        questions: Sequence[Obligation] = (),
+        avoid: str | None = None,
+        closing: bool = False,
     ) -> Reply:
+        names = [bot.name, *others]
         system = system_prompt(bot, others, memories)
-        prompt = conversation_prompt(recent_posts, bot.name, [bot.name, *others])
+        prompt = conversation_prompt(
+            recent_posts, bot.name, names, questions, avoid, closing
+        )
         info = settings.model_info(bot.model)
         if info.provider == "ollama":
             reply = await self.ollama.generate(
@@ -451,7 +459,9 @@ class AIClient:
             reply, _ = await self.gemini.generate(
                 bot.model, system, prompt, bot.temperature
             )
-        reply.text = clean_post(reply.text, bot.name)
+        cleaned = sanitize_post(reply.text, bot.name, names, max_words=MAX_POST_WORDS)
+        reply.text = cleaned.text
+        reply.fixes = cleaned.fixes
         if not reply.text:
             raise ModelError("reply was only a name prefix", bot.model)
         return reply

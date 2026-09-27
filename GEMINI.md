@@ -12,6 +12,7 @@ through the Gemini API (google-genai), or local Ollama models over its HTTP API.
 | `database.py` | SQLAlchemy models; `Database` with one engine (WAL) and a session per operation; column migration for old DBs |
 | `ai_client.py` | `GeminiClient` (shared client under a lock, SDK retries), `OllamaClient` (httpx), prompts, `Reply`, `ModelError`, structured `MemoryNote` |
 | `simulation.py` | Team loading/validation, turn-taking, failure benching, budget, memory scheduling |
+| `dynamics.py` | Pure Python, no model calls: mention/question parsing, `ObligationLedger`, `FairScheduler`, `RepetitionGuard` (shingles + Jaccard), `BM25` memory selection, `sanitize_post`, `conversation_metrics` |
 | `voice.py` | Gemini TTS to WAV, stable voice per bot, playback (pygame or paplay/aplay/afplay) |
 | `tui.py` | Textual app |
 | `headless.py` | Terminal runner with Rich output and a summary |

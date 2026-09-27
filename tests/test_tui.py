@@ -13,7 +13,9 @@ class FakeAI:
         self.gemini = GeminiClient(api_key="x")
         self.ollama = OllamaClient("http://127.0.0.1:9")  # nothing listens
 
-    async def write_post(self, bot, others, recent, memories):
+    async def write_post(
+        self, bot, others, recent, memories, questions=(), avoid=None, closing=False
+    ):
         return Reply(f"hello from {bot.name}", bot.model, 10, 5, 0.001, 20, "STOP")
 
     async def form_memory(self, bot, recent):
@@ -99,7 +101,7 @@ async def test_voice_on_waits_for_speech_before_next_post(tmp_path):
     events = []
 
     class LoggingAI(FakeAI):
-        async def write_post(self, bot, others, recent, memories):
+        async def write_post(self, bot, others, recent, memories, **kw):
             events.append("write")
             return await super().write_post(bot, others, recent, memories)
 

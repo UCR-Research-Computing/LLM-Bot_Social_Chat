@@ -26,6 +26,7 @@ def new_run_dir(base: Path | None = None) -> Path:
 def setup_logging(run_dir: Path | None = None, level: int = logging.INFO) -> Path:
     """Send all logging to <run>/simulation.jsonl (and nothing to the terminal)."""
     run = run_dir or new_run_dir()
+    (run / "audio").mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
     root.setLevel(level)
     for h in root.handlers[:]:

@@ -62,6 +62,7 @@ async def run_headless(
     keep_posts: bool,
     db_url: str | None = None,
     run_dir: Path | None = None,
+    wrap_up: int = 4,
 ) -> dict[str, Any]:
     run = setup_logging(run_dir or new_run_dir())
     db = Database(db_url)
@@ -105,11 +106,19 @@ async def run_headless(
 
     start = time.monotonic()
     reason = "done"
+    extra = 0
     try:
         while not stop.is_set():
             if max_posts and sim.stats.posts >= max_posts:
-                reason = "max posts reached"
-                break
+                # Wrap-up: let bots that still owe an answer give it, up to
+                # `wrap_up` extra posts, so the run does not end mid-question.
+                if not sim.open_questions or extra >= wrap_up:
+                    reason = "max posts reached" + (
+                        f" (+{extra} wrap-up)" if extra else ""
+                    )
+                    break
+                sim.closing = True
+                extra += 1
             if duration and time.monotonic() - start >= duration:
                 reason = "duration reached"
                 break
@@ -147,6 +156,12 @@ async def run_headless(
         "tokens_out": s.tokens_out,
         "cost_usd": round(s.cost_usd, 4),
         "tts_cost_usd": round(s.tts_cost_usd, 4),
+        "questions": s.questions,
+        "answered": s.answered,
+        "open_questions": sim.open_questions,
+        "regenerated": s.regenerated,
+        "sanitized": s.fixes,
+        "duplicate_memories": s.dup_memories,
         "seconds": round(time.monotonic() - start, 1),
         "run_dir": str(run),
     }
@@ -155,6 +170,12 @@ async def run_headless(
         f"\n[bold]Stopped:[/] {reason}. {s.posts} posts, {s.errors} errors, "
         f"{s.memories} new memories, {s.tokens_in + s.tokens_out:,} tokens, "
         f"about ${s.cost_usd + s.tts_cost_usd:.4f}. Log: {run / 'simulation.jsonl'}"
+    )
+    console.print(
+        f"[dim]Questions: {s.questions} asked, {s.answered} answered, "
+        f"{sim.open_questions} open. Repeats regenerated: {s.regenerated}. "
+        f"Replies cleaned up: {s.fixes}. Duplicate memories skipped: "
+        f"{s.dup_memories}.[/]"
     )
     return summary
 
@@ -175,6 +196,7 @@ def main_headless(args: Any) -> int:
             delay=args.delay,
             budget=args.budget,
             keep_posts=args.keep,
+            wrap_up=args.wrap_up,
         )
     )
     return 0

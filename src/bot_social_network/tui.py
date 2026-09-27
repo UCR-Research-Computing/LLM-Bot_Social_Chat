@@ -367,7 +367,8 @@ class BotSocialApp(App[None]):
         budget = f" / ${self.sim.budget_usd:.2f}" if self.sim.budget_usd else ""
         self.query_one("#status", Static).update(
             f"{state}  every {self.interval:.0f}s   posts {s.posts}   errors {s.errors}   "
-            f"memories {s.memories}   tokens {s.tokens_in + s.tokens_out:,}   "
+            f"memories {s.memories}   open questions {self.sim.open_questions}   "
+            f"tokens {s.tokens_in + s.tokens_out:,}   "
             f"cost ${s.cost_usd + s.tts_cost_usd:.4f}{budget}   voice {'ON' if self.tts else 'off'}"
         )
 
@@ -549,6 +550,7 @@ class BotSocialApp(App[None]):
         async def done(yes: bool | None) -> None:
             if yes:
                 await asyncio.to_thread(self.db.clear_posts)
+                self.sim.reset_dynamics()
                 await self.refresh_feed()
 
         self.push_screen(

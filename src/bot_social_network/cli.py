@@ -68,6 +68,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="continue the current chat instead of reloading the team",
     )
+    h.add_argument(
+        "--wrap-up",
+        type=int,
+        default=4,
+        metavar="N",
+        help="after --max-posts, up to N extra posts so open questions get "
+        "answered (default 4, 0 to stop exactly)",
+    )
 
     sub.add_parser("teams", help="list bundled and saved teams")
 
@@ -91,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="simulation.jsonl, run folder, or 'latest'",
     )
     a.add_argument("-o", "--output", help="output HTML path (default: next to the log)")
+    a.add_argument(
+        "--json",
+        action="store_true",
+        help="print conversation-quality metrics as JSON instead of the report",
+    )
 
     sub.add_parser("doctor", help="check key, models, Ollama, audio and data paths")
     return p
@@ -140,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "analyze":
         from .analyzer import analyze_cli
 
-        return analyze_cli(args.log, args.output)
+        return analyze_cli(args.log, args.output, as_json=args.json)
     if cmd == "doctor":
         return _doctor()
     return 1

@@ -15,6 +15,13 @@ topic, and watch them argue, remember what was said, and (optionally) speak out 
 - **Real conversations.** Bots answer whoever @mentions them, quiet bots get the floor, nobody
   talks twice in a row. Persona and memories go in the system instruction; the chat goes in
   the prompt.
+- **Plain code where AI is not needed.** The model only writes the words. Around it,
+  `dynamics.py` (pure Python, no model calls) keeps a ledger of open @mention questions and
+  lets whoever owes an answer speak first; shares the floor fairly by words spoken; catches
+  near-duplicate posts (3-word shingles, Jaccard) and regenerates them once; cleans replies
+  (lines written for other bots, misspelled @names, runaway length); picks the memories to
+  show with BM25 relevance; and skips duplicate memories. When `--max-posts` is reached, up
+  to `--wrap-up` extra posts (default 4) let open questions get answered.
 - **Memory that means something.** Every few posts a bot decides (as structured JSON) whether
   it learned something worth keeping. Memories feed back into its next posts.
 - **Voices.** Each bot gets one of 30 Gemini TTS voices, stable across runs (or pick one).
@@ -25,7 +32,9 @@ topic, and watch them argue, remember what was said, and (optionally) speak out 
 - **Cost you can see.** Tokens, latency and cost per post; a live total in the TUI; `--budget`
   stops or pauses a run at a dollar limit.
 - **Analysis.** `analyze latest` writes an HTML report: activity and cost per bot, an @mention
-  graph, and sentiment over time.
+  graph, sentiment over time, and conversation quality measured by plain code (mentions
+  answered, questions answered, reply latency, reciprocity, speaking balance, repetition).
+  `analyze latest --json` prints the metrics.
 - **Works from any folder.** Key, saved teams, database and logs live in your home directory.
 
 ## Install
@@ -52,6 +61,7 @@ bot-social-network teams                             # bundled and saved teams
 bot-social-network models --check                    # test each Gemini model live
 bot-social-network models --check --ollama gemma4:e4b
 bot-social-network analyze latest                    # HTML report of the last run
+bot-social-network analyze latest --json             # conversation-quality metrics
 ```
 
 ### TUI keys

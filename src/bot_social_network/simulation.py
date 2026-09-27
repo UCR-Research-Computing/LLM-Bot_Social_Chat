@@ -1,9 +1,19 @@
 """The simulation engine shared by the TUI and headless runs.
 
-Turn-taking picks who speaks next: someone @mentioned in the last post first, then
-the bot that has been quiet longest (with some randomness), never the same bot
-twice in a row. A failed model call is recorded as a SYSTEM post with the reason and
-never crashes the loop; a bot that fails 3 times in a row is benched for 5 turns.
+The model only writes the words. Everything around it is deterministic code from
+dynamics.py:
+
+- Turn-taking: a ledger of open @mention questions is a priority queue; the bot
+  with the oldest unanswered question speaks next. Otherwise a bot owed a reply
+  (mentioned since it last spoke), otherwise the fair-share scheduler (fewest
+  words spoken so far, then silent longest) picks, with a little randomness. Never the same
+  bot twice in a row.
+- Every reply is sanitized (fabricated lines, bad @names, length) and checked for
+  near-duplicates (3-word shingles, Jaccard); a repeat is regenerated once.
+- Memories shown to a bot are chosen by BM25 relevance to the recent chat, and
+  near-duplicate memories are not stored.
+- A failed model call is recorded as a SYSTEM post with the reason and never
+  crashes the loop; a bot that fails 3 times in a row is benched for 5 turns.
 """
 
 from __future__ import annotations
@@ -19,12 +29,20 @@ from typing import Any, Callable
 
 from . import settings
 from .ai_client import AIClient, ModelError, gather_limited, inbox
-from .database import Bot, Database, Post
+from .database import Bot, Database, Memory, Post
+from .dynamics import (
+    FairScheduler,
+    ObligationLedger,
+    RepetitionGuard,
+    is_duplicate_memory,
+    select_memories,
+)
 
 log = logging.getLogger(__name__)
 
 MAX_FAILS = 3
 BENCH_TURNS = 5
+MEMORY_SLOTS = 8  # memories shown per post, picked by BM25
 
 
 # --------------------------------------------------------------------------- teams
@@ -128,6 +146,11 @@ class Stats:
     cost_usd: float = 0.0
     tts_cost_usd: float = 0.0
     by_bot: dict[str, int] = field(default_factory=dict)
+    regenerated: int = 0  # replies redone because they repeated an earlier post
+    fixes: int = 0  # replies the sanitizer changed
+    questions: int = 0
+    answered: int = 0
+    dup_memories: int = 0
 
 
 class Simulation:
@@ -153,6 +176,12 @@ class Simulation:
         self.stats = Stats()
         self.background: set[asyncio.Task[Any]] = set()
         self._rr = 0
+        self.ledger = ObligationLedger()
+        self.fair = FairScheduler()
+        self.repeats = RepetitionGuard()
+        # Wrap-up mode: bots answer what they owe and close; new questions are
+        # not tracked, so the run can end with nothing left hanging.
+        self.closing = False
 
     # ---- setup ---------------------------------------------------------------
     def load_team(self, name_or_path: str) -> list[str]:
@@ -161,11 +190,23 @@ class Simulation:
         self.db.replace_team(bots)
         self.state.clear()
         self.turn = 0
+        self.reset_dynamics()
         log.info(
             "team loaded",
             extra={"event": "config.load.success", "config_filename": path.name},
         )
         return notes
+
+    def reset_dynamics(self) -> None:
+        """Forget open questions, fair-share credit and repetition history (for a
+        new team or a cleared feed)."""
+        self.ledger = ObligationLedger()
+        self.fair = FairScheduler()
+        self.repeats = RepetitionGuard()
+
+    @property
+    def open_questions(self) -> int:
+        return len(self.ledger)
 
     def inject_topic(self, topic: str) -> Post:
         post = self.db.add_post(content=topic.strip(), sender="SYSTEM")
@@ -195,10 +236,15 @@ class Simulation:
             return bot
         last_sender = recent[0].sender if recent else None
         pool = [b for b in active if b.name != last_sender] or active
+        by_name = {b.name: b for b in pool}
+        self.fair.sync(b.name for b in bots)
+        # 1. The oldest unanswered question in the ledger (a priority queue).
+        for name, _turn in self.ledger.debtors():
+            if name in by_name and self.rng.random() < 0.95:
+                return by_name[name]
         if recent:
-            # Whoever owes a reply speaks next: a bot @mentioned since it last
-            # spoke, oldest unanswered mention first. Only if nobody is owed a
-            # reply do we fall back to giving quiet bots the floor.
+            # 2. Whoever was @mentioned since they last spoke (no question mark
+            #    needed), oldest mention first.
             all_names = [b.name for b in bots]
             owed: list[tuple[int, Bot]] = []
             for b in pool:
@@ -209,14 +255,12 @@ class Simulation:
             if owed and self.rng.random() < 0.9:
                 owed.sort(key=lambda t: -t[0])  # largest index = oldest mention
                 return owed[0][1]
-        # Weight by turns since last spoke so quiet bots get the floor.
-        weights = [
-            1 + (self.turn - self.state[b.name].last_turn)
-            if self.state[b.name].last_turn >= 0
-            else self.turn + 2
-            for b in pool
-        ]
-        return self.rng.choices(pool, weights=weights, k=1)[0]
+        # 3. Fair share: fewest words spoken so far, then silent longest. Pick
+        #    between the two fairest so the order is not rigid.
+        ranked = self.fair.ranked([b.name for b in pool])
+        top = ranked[:2] if len(ranked) > 1 else ranked
+        weights = [2.0, 1.0][: len(top)]
+        return by_name[self.rng.choices(top, weights=weights, k=1)[0]]
 
     # ---- one step ------------------------------------------------------------
     async def step(self) -> Post | None:
@@ -228,12 +272,45 @@ class Simulation:
         if bot is None:
             self.turn += 1
             return None
-        st = self.state[bot.name]
+        st = self.state.setdefault(bot.name, BotState())
         others = [b.name for b in bots if b.name != bot.name]
-        memories = await asyncio.to_thread(self.db.memories, bot.id)
+        names = [b.name for b in bots]
+        memories = self._relevant_memories(
+            await asyncio.to_thread(self.db.memories, bot.id, 200), recent
+        )
+        owed = self.ledger.owed_by(bot.name)
         self.turn += 1
         try:
-            reply = await self.ai.write_post(bot, others, recent, memories)
+            reply = await self.ai.write_post(
+                bot, others, recent, memories, questions=owed, closing=self.closing
+            )
+            score, _who = self.repeats.check(reply.text)
+            if score >= self.repeats.threshold:
+                # Near-duplicate of a recent post: regenerate once, keep the
+                # less repetitive of the two.
+                first = reply
+                again = await self.ai.write_post(
+                    bot,
+                    others,
+                    recent,
+                    memories,
+                    questions=owed,
+                    avoid=first.text,
+                    closing=self.closing,
+                )
+                self.stats.cost_usd += first.cost_usd
+                self.stats.tokens_in += first.tokens_in
+                self.stats.tokens_out += first.tokens_out
+                self.stats.regenerated += 1
+                reply = again if self.repeats.check(again.text)[0] < score else first
+                log.info(
+                    "regenerated repeat",
+                    extra={
+                        "event": "post.regenerated",
+                        "bot_name": bot.name,
+                        "similarity": round(score, 3),
+                    },
+                )
         except ModelError as e:
             st.fails += 1
             self.stats.errors += 1
@@ -264,6 +341,9 @@ class Simulation:
 
         st.fails = 0
         st.last_turn = self.turn
+        self._account(bot.name, reply.text, names)
+        if reply.fixes:
+            self.stats.fixes += 1
         post = await asyncio.to_thread(
             self.db.add_post,
             content=reply.text,
@@ -292,12 +372,37 @@ class Simulation:
                 "tokens_out": reply.tokens_out,
                 "cost_usd": reply.cost_usd,
                 "latency_ms": reply.latency_ms,
+                "fixes": reply.fixes,
+                "open_questions": len(self.ledger),
             },
         )
+        # Register questions asked in this post now that it has a post id.
+        if not self.closing:
+            new = self.ledger.record(post.id, bot.name, post.content, names, self.turn)
+            self.stats.questions += len(new)
         self.on_event("post", {"post": post})
         if self.memory_every and s.by_bot[bot.name] % self.memory_every == 0:
             self._spawn(self.form_memory(bot))
         return post
+
+    def _account(self, speaker: str, text: str, names: list[str]) -> None:
+        """Deterministic bookkeeping for an accepted post (before it is stored)."""
+        done = self.ledger.resolve(speaker, text, names, self.turn)
+        self.stats.answered += len(done)
+        self.ledger.expire(self.turn)
+        self.fair.spend(speaker, len(text.split()))
+        self.repeats.add(speaker, text)
+
+    def _relevant_memories(
+        self, memories: list[Memory], recent: list[Post]
+    ) -> list[Memory]:
+        """Up to MEMORY_SLOTS memories: the persona seeds, then BM25 matches for
+        the last few posts, then the newest."""
+        query = " ".join(p.content for p in recent[:4] if not p.error)
+        idx = select_memories(
+            [(m.key, m.value) for m in memories], query, k=MEMORY_SLOTS
+        )
+        return [memories[i] for i in idx]
 
     async def form_memory(self, bot: Bot) -> None:
         recent = await asyncio.to_thread(self.db.recent_posts, 6)
@@ -316,6 +421,20 @@ class Simulation:
         if reply:
             self.stats.cost_usd += reply.cost_usd
         if note and note.worth_keeping and note.key.strip() and note.value.strip():
+            existing = await asyncio.to_thread(self.db.memories, bot.id, 200)
+            if is_duplicate_memory(
+                (note.key, note.value), [(m.key, m.value) for m in existing]
+            ):
+                self.stats.dup_memories += 1
+                log.info(
+                    "duplicate memory skipped",
+                    extra={
+                        "event": "memory.form.duplicate",
+                        "bot_name": bot.name,
+                        "memory_key": note.key,
+                    },
+                )
+                return
             await asyncio.to_thread(
                 self.db.add_memory, bot.id, note.key.strip(), note.value.strip()
             )

@@ -30,7 +30,9 @@ class FakeAI:
         self.memory = memory
         self.calls = []
 
-    async def write_post(self, bot, others, recent, memories):
+    async def write_post(
+        self, bot, others, recent, memories, questions=(), avoid=None, closing=False
+    ):
         self.calls.append(bot.name)
         if bot.name in self.fail_for:
             raise ModelError("429 rate limited", bot.model)
@@ -225,3 +227,116 @@ def test_topic_injection(db, tmp_path):
     sim.load_team(str(write_team(tmp_path)))
     p = sim.inject_topic("  GPUs or TPUs?  ")
     assert p.sender == "SYSTEM" and p.content == "GPUs or TPUs?"
+
+
+# ---- deterministic dynamics in the engine ------------------------------------
+
+
+class ScriptAI(FakeAI):
+    """Replies from a script: {bot: [text, text, ...]} consumed in order."""
+
+    def __init__(self, script, memory=None):
+        super().__init__(memory=memory)
+        self.script = {k: list(v) for k, v in script.items()}
+        self.seen = []  # (bot, questions, avoid)
+
+    async def write_post(
+        self, bot, others, recent, memories, questions=(), avoid=None, closing=False
+    ):
+        self.calls.append(bot.name)
+        self.seen.append((bot.name, [q.question for q in questions], avoid))
+        text = self.script[bot.name].pop(0) if self.script.get(bot.name) else "ok"
+        return Reply(text, bot.model, 10, 5, 0.001, 50, "STOP")
+
+
+def test_open_question_decides_next_speaker_and_is_passed_to_prompt(db, tmp_path):
+    ai = ScriptAI(
+        {
+            "Dan": ["@Mike what is the storage plan for the new racks?"],
+            "Mike": ["@Dan Ceph on NVMe for the storage plan."],
+        }
+    )
+    sim = Simulation(db, ai, seed=3, memory_every=0)
+    sim.load_team(str(write_team(tmp_path)))
+    sim.pick_speaker = lambda bots, recent: next(b for b in bots if b.name == "Dan")
+    asyncio.run(sim.step())
+    assert sim.open_questions == 1
+    del sim.pick_speaker  # back to the real scheduler
+    picks = [sim.pick_speaker(db.bots(), db.recent_posts()).name for _ in range(40)]
+    assert picks.count("Mike") >= 34  # ledger debtor goes first 95% of the time
+    sim.rng.seed(0)
+    asyncio.run(sim.step())
+    name, questions, _ = ai.seen[-1]
+    assert name == "Mike"
+    assert questions == ["@Mike what is the storage plan for the new racks?"]
+    assert sim.open_questions == 0
+    assert sim.stats.questions == 1 and sim.stats.answered == 1
+
+
+def test_repeat_is_regenerated_once(db, tmp_path):
+    line = "We should put every GPU in rack four because it has the best cooling."
+    ai = ScriptAI(
+        {
+            "Dan": [line],
+            "Steve": [
+                line.replace("best", "most"),
+                "Storage is the real problem here.",
+            ],
+            "Mike": ["fine"],
+        }
+    )
+    sim = Simulation(db, ai, seed=1, memory_every=0)
+    sim.load_team(str(write_team(tmp_path)))
+    order = iter(["Dan", "Steve"])
+
+    def pick(bots, recent):
+        want = next(order)
+        return next(b for b in bots if b.name == want)
+
+    sim.pick_speaker = pick
+    asyncio.run(sim.step())
+    post = asyncio.run(sim.step())
+    assert post.content == "Storage is the real problem here."
+    assert sim.stats.regenerated == 1
+    assert ai.seen[-1][2] == line.replace("best", "most")  # the draft to avoid
+
+
+def test_duplicate_memory_not_stored(db, tmp_path):
+    note = MemoryNote(
+        worth_keeping=True, key="Steve TPUs", value="Steve wants TPUs for training"
+    )
+    sim = Simulation(db, FakeAI(memory=note), seed=1, memory_every=0)
+    sim.load_team(str(write_team(tmp_path)))
+    bot = db.bots()[0]
+    asyncio.run(sim.form_memory(bot))
+    asyncio.run(sim.form_memory(bot))
+    assert sim.stats.memories == 1 and sim.stats.dup_memories == 1
+    assert [m.value for m in db.memories(bot.id)].count(
+        "Steve wants TPUs for training"
+    ) == 1
+
+
+def test_relevant_memories_are_capped_and_ranked(db, tmp_path):
+    from bot_social_network.simulation import MEMORY_SLOTS
+
+    sim = Simulation(db, FakeAI(), seed=1, memory_every=0)
+    sim.load_team(str(write_team(tmp_path)))
+    bot = db.bots()[0]
+    for i in range(30):
+        db.add_memory(bot.id, f"note {i}", f"filler number {i}")
+    db.add_memory(bot.id, "cooling", "rack four has liquid cooling")
+    db.add_memory(bot.id, "late", "newest thing")
+    recent = [Post(sender="Steve", content="does rack four have liquid cooling?")]
+    mems = sim._relevant_memories(db.memories(bot.id, 200), recent)
+    assert len(mems) == MEMORY_SLOTS
+    assert "rack four has liquid cooling" in [m.value for m in mems]
+
+
+def test_fair_share_spreads_turns(db, tmp_path):
+    team = [{"name": n, "persona": "p", "model": "gemini-3.8-flash"} for n in "ABCD"]
+    sim = Simulation(db, FakeAI(), seed=4, memory_every=0)
+    sim.load_team(str(write_team(tmp_path, team)))
+    for _ in range(40):
+        asyncio.run(sim.step())
+    counts = sorted(sim.stats.by_bot.values())
+    assert counts[0] >= 8 and counts[-1] <= 12  # 40 posts over 4 bots, near even
