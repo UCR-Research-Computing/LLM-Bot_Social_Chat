@@ -43,6 +43,8 @@ def test_report_written_next_to_log_with_cost(tmp_path):
     assert "Simulation Analysis Report" in html and "Dan" in html and "Steve" in html
     assert "$0.0010" in html  # total cost
     assert "Failed turns" in html
+    assert "Conversation Quality" in html
+    assert "0 of 1 (1 left open)" in html  # Steve asked Dan; Dan never replied
 
 
 def test_resolve_latest_and_folder(tmp_path):
@@ -61,3 +63,14 @@ def test_no_posts(tmp_path, capsys):
     log = write_log(tmp_path / "empty.jsonl", [{"event": "system.init"}])
     assert analyze_log(str(log)) is None
     assert "No posts found" in capsys.readouterr().out
+
+
+def test_json_metrics(tmp_path, capsys):
+    log = write_log(tmp_path / "run" / "simulation.jsonl")
+    assert analyze_cli(str(log), as_json=True) == 0
+    m = json.loads(capsys.readouterr().out)
+    assert m["posts"] == 2 and m["mentions"] == 2
+    assert m["mention_reply_rate"] == 0.5  # Dan->Steve answered, Steve->Dan not
+    assert m["questions"] == 1 and m["open_questions"] == 1
+    assert m["reciprocity"] == 1.0
+    assert m["cost_usd"] == 0.001

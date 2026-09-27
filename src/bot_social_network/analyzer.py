@@ -21,6 +21,7 @@ from textblob import TextBlob  # type: ignore  # noqa: E402
 
 from . import settings  # noqa: E402
 from .ai_client import mentions as find_mentions  # noqa: E402
+from .dynamics import conversation_metrics  # noqa: E402
 
 
 def resolve_log(arg: str) -> Path:
@@ -43,12 +44,55 @@ def resolve_log(arg: str) -> Path:
     return p
 
 
-def analyze_cli(arg: str, output: str | None = None) -> int:
+def read_events(log_file_path: str | Path) -> list[dict]:
+    out = []
+    with open(log_file_path) as f:
+        for line in f:
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
+
+
+def log_metrics(log_file_path: str | Path) -> dict:
+    """Deterministic conversation metrics for one run (no model calls)."""
+    events = read_events(log_file_path)
+    posts: list[tuple[str, str]] = []
+    names: list[str] = []
+    for e in events:
+        if e.get("event") == "topic.injected":
+            posts.append(("SYSTEM", str(e.get("topic", ""))))
+        elif e.get("event") == "post.generated":
+            n = str(e.get("bot_name", ""))
+            posts.append((n, str(e.get("post_content", ""))))
+            if n not in names:
+                names.append(n)
+    m: dict = dict(conversation_metrics(posts, names))
+    m["regenerated"] = sum(1 for e in events if e.get("event") == "post.regenerated")
+    m["sanitized"] = sum(
+        1 for e in events if e.get("event") == "post.generated" and e.get("fixes")
+    )
+    m["cost_usd"] = round(
+        sum(
+            float(e.get("cost_usd") or 0)
+            for e in events
+            if e.get("event") == "post.generated"
+        ),
+        4,
+    )
+    return m
+
+
+def analyze_cli(arg: str, output: str | None = None, as_json: bool = False) -> int:
     try:
         log = resolve_log(arg)
     except FileNotFoundError as e:
         print(f"Log not found: {e}")
         return 1
+    if as_json:
+        print(json.dumps({"log": str(log), **log_metrics(log)}, indent=2))
+        return 0
     out = analyze_log(str(log), output)
     return 0 if out else 1
 
@@ -56,14 +100,7 @@ def analyze_cli(arg: str, output: str | None = None) -> int:
 def analyze_log(log_file_path: str, output: str | None = None) -> str | None:
     print(f"Analyzing {log_file_path}...")
 
-    data = []
-    with open(log_file_path, "r") as f:
-        for line in f:
-            try:
-                data.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-
+    data = read_events(log_file_path)
     df_raw = pd.DataFrame(data)
     if df_raw.empty or "event" not in df_raw:
         print("No posts found in log file.")
@@ -214,6 +251,7 @@ def analyze_log(log_file_path: str, output: str | None = None) -> str | None:
         errors=errors,
         memories=memories,
         source=str(log_file_path),
+        metrics=log_metrics(log_file_path),
     )
 
     output_filename = output or os.path.join(

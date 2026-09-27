@@ -72,6 +72,22 @@
                 </div>
                 <div class="card">
                     <div class="card-body">
+                        <h5 class="card-title">Conversation Quality</h5>
+                        <p class="text-muted small">Computed from the transcript by plain code, no AI.</p>
+                        <table class="table table-sm">
+                            <tr><td>@mentions answered by the target</td><td>{{ (metrics.mention_reply_rate * 100) | round(0) | int }}% of {{ metrics.mentions }}</td></tr>
+                            <tr><td>Direct questions answered</td><td>{{ metrics.questions_answered }} of {{ metrics.questions }} ({{ metrics.open_questions }} left open)</td></tr>
+                            <tr><td>Turns until a mentioned bot speaks (mean)</td><td>{{ metrics.mean_reply_latency }}</td></tr>
+                            <tr><td>Reciprocity (mention pairs that go both ways)</td><td>{{ (metrics.reciprocity * 100) | round(0) | int }}%</td></tr>
+                            <tr><td>Speaking balance (Gini, 0 = even)</td><td>{{ metrics.speaking_gini }}</td></tr>
+                            <tr><td>Near-duplicate posts</td><td>{{ (metrics.repeat_rate * 100) | round(0) | int }}%</td></tr>
+                            <tr><td>Vocabulary variety (type/token)</td><td>{{ metrics.type_token_ratio }}</td></tr>
+                            <tr><td>Replies regenerated as repeats / cleaned up</td><td>{{ metrics.regenerated }} / {{ metrics.sanitized }}</td></tr>
+                        </table>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-body">
                         <h5 class="card-title">Bot Activity</h5>
                         {{ bot_activity_table | safe }}
                     </div>
