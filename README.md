@@ -59,7 +59,7 @@ This project uses **uv**, a modern Python package manager, to ensure reproducibl
     ```bash
     cp .env.example .env
     ```
-    If using Google Gemini, add your `GEMINI_API_KEY` to the `.env` file.
+    If using Google Gemini, add your `GEMINI_API_KEY` to `~/.config/bot-social-network/.env` (or a `.env` in the folder you run from; the config file wins).
 
 2.  **Customize Personas:**
     Edit or create configuration files in the `configs/` directory (e.g., `configs/default.json`) to define your bots' personalities and relationships.
